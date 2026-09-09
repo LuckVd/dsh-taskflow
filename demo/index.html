@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>dsh-taskflow · demo</title>
+  <style>
+    /* demo 页模拟宿主主题变量（--dsw-alias-*）：深浅色自动适配演示 */
+    :root {
+      --dsw-alias-bg-canvas: #f6f8fa; --dsw-alias-bg-raised: #ffffff; --dsw-alias-bg-sunken: #eff2f5;
+      --dsw-alias-bg-inset: #f6f8fa; --dsw-alias-bg-hover: #eef1f4;
+      --dsw-alias-border-faint: #d1d9e0; --dsw-alias-border-regular: #afb8c1;
+      --dsw-alias-label-primary: #1f2328; --dsw-alias-label-secondary: #59636e;
+      --dsw-alias-accent-solid: #1f6feb; --dsw-alias-accent-solid-hover: #388bfd;
+      --dsw-alias-accent-fg: #0969da; --dsw-alias-accent-contrast: #ffffff;
+      --dsw-alias-focus-ring: #4c8dff;
+      --dsw-alias-status-success-fg: #1a7f37; --dsw-alias-status-success-muted: #dafbe1;
+      --dsw-alias-status-warning-fg: #9a6700; --dsw-alias-status-warning-muted: #fff8c5;
+      --dsw-alias-status-warning-border: #d8a657;
+      --dsw-alias-status-error-fg: #cf222e; --dsw-alias-status-error-muted: #ffebe9; --dsw-alias-status-error-border: #cf222e88;
+      --dsw-alias-shadow-soft: #1f232814;
+      --dsw-alias-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --dsw-alias-bg-canvas: #10151c; --dsw-alias-bg-raised: #171e26; --dsw-alias-bg-sunken: #0d1218;
+        --dsw-alias-bg-inset: #10161e; --dsw-alias-bg-hover: #1d2630;
+        --dsw-alias-border-faint: #2a3441; --dsw-alias-border-regular: #3d4956;
+        --dsw-alias-label-primary: #e2e8f0; --dsw-alias-label-secondary: #93a1b0;
+        --dsw-alias-accent-solid: #2f81f7; --dsw-alias-accent-solid-hover: #4493f8;
+        --dsw-alias-accent-fg: #58a6ff;
+        --dsw-alias-status-success-fg: #3fb950; --dsw-alias-status-success-muted: #12261e;
+        --dsw-alias-status-warning-fg: #d29922; --dsw-alias-status-warning-muted: #261d0d;
+        --dsw-alias-status-error-fg: #f85149; --dsw-alias-status-error-muted: #2d1416; --dsw-alias-status-error-border: #f8514988;
+        --dsw-alias-shadow-soft: #00000055;
+      }
+    }
+    html, body { margin: 0; height: 100%; background: var(--dsw-alias-bg-canvas); }
+    #root { height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import { mountTaskflow, createHttpTransport } from '/client.demo.js'
+    mountTaskflow(document.getElementById('root'), createHttpTransport(''))
+  </script>
+</body>
+</html>

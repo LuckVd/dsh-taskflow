@@ -1,0 +1,5 @@
+# dsh-taskflow bundle patch：把插件插入宿主组合层。
+# 安装形态：`dsh plugin --profile <name> add dsh-taskflow`
+- insert:
+    - id: taskflow
+      name: dsh-taskflow

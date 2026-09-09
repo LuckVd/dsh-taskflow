@@ -1,0 +1,70 @@
+{
+  "name": "dsh-taskflow",
+  "version": "0.1.0",
+  "description": "AI 合同式任务看板 —— DeepSeek Harness Web 插件：AI 拆解、AI 实现、AI 举证，人来验收。",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/host/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/host/index.d.ts",
+      "default": "./dist/host/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client.dsh.js"
+    }
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/build-client.mjs",
+    "demo": "node demo/serve.mjs",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('demo-data',{recursive:true,force:true})\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.2",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.1",
+    "@deepseek-ai/dsh-home-paths": ">=0.0.1-rc.1",
+    "@deepseek-ai/dsh-host-webserver": ">=0.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.1",
+    "@deepseek-ai/dsh-session": ">=0.1.0-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1",
+    "react": ">=18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.0.1-rc.3",
+    "@deepseek-ai/dsh-host-webserver": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
