@@ -35,7 +35,7 @@ function newRequestId(): string {
   return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JSX.Element {
+export function TaskflowApp({ transport, onClose }: { transport: TaskflowTransport; onClose?: () => void }): JSX.Element {
   const [state, setState] = useState<EngineState | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [sseUp, setSseUp] = useState(true)
@@ -81,7 +81,7 @@ export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JS
   const selected = tasks.find(t => t.id === selectedId) ?? null
 
   return (
-    <div className="tf-board" role="application" aria-label="taskflow 看板">
+    <div className="tf-root tf-board" role="application" aria-label="taskflow 看板">
       {loadError !== null && (
         <div className="tf-banner" role="alert">
           <span>加载失败：{loadError}</span>
@@ -95,14 +95,19 @@ export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JS
       )}
       <div className="tf-toolbar">
         <span className="tf-title">任务看板</span>
-        <input
-          className="tf-search"
-          type="search"
-          placeholder="搜索标题 / 描述 / 子任务"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          aria-label="搜索任务"
-        />
+        <label className="tf-search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="M16 16l4.5 4.5" />
+          </svg>
+          <input
+            type="search"
+            placeholder="搜索标题 / 描述 / 子任务"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            aria-label="搜索任务"
+          />
+        </label>
         <select className="tf-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)} aria-label="状态过滤">
           <option value="all">全部状态</option>
           <option value="active">进行中</option>
@@ -111,9 +116,13 @@ export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JS
           <option value="done">已完成</option>
         </select>
         <span className="tf-badge tf-badge-review" role="status" aria-label="待验收数量">
+          <i aria-hidden="true" />
           待验收 {reviewCount}
         </span>
         <button type="button" className="tf-btn tf-btn-primary" onClick={() => setCreateOpen(true)}>+ 新建任务</button>
+        {onClose !== undefined && (
+          <button type="button" className="tf-btn" onClick={onClose} aria-label="返回会话">✕ 返回会话</button>
+        )}
         <span className="tf-sse-bar">{sseUp ? '' : '实时同步已断开，正在重连…'}</span>
       </div>
 
@@ -127,11 +136,14 @@ export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JS
             <section className="tf-column" key={group.id} role="list" aria-label={group.title}>
               <header className="tf-column-head">
                 <span>{group.title}</span>
-                <span className="tf-column-count">{group.cards.length}</span>
+                <span className={`tf-column-count${group.id === 'review' && group.cards.length > 0 ? ' hot' : ''}`}>{group.cards.length}</span>
               </header>
-              {group.cards.map(card => (
-                <TaskCard key={card.task.id} card={card} onOpen={() => setSelectedId(card.task.id)} />
-              ))}
+              <div className="tf-column-cards">
+                {group.cards.map(card => (
+                  <TaskCard key={card.task.id} card={card} onOpen={() => setSelectedId(card.task.id)} />
+                ))}
+                {group.cards.length === 0 && <div className="tf-column-empty">暂无任务</div>}
+              </div>
             </section>
           ))}
         </div>
@@ -160,35 +172,40 @@ export function TaskflowApp({ transport }: { transport: TaskflowTransport }): JS
 function TaskCard({ card, onOpen }: { card: CardSummary; onOpen: () => void }): JSX.Element {
   const { task } = card
   const blocked = task.status === 'blocked'
+  const running = task.status === 'decomposing' || task.status === 'in-progress'
   return (
     <button
       type="button"
       role="listitem"
-      className={`tf-card${blocked ? ' tf-card-blocked' : ''}${task.status === 'review' ? ' tf-card-review-req' : ''}`}
+      className="tf-card"
+      data-status={task.status}
       onClick={onOpen}
+      title={task.description !== '' ? task.description : task.title}
       aria-label={`打开任务 ${task.title}`}
     >
       <span className="tf-card-title">{task.title}</span>
-      <span className="tf-card-desc">{task.description}</span>
-      {card.totalCount > 0 && (
-        <>
-          <span className="tf-progress" role="img" aria-label={`进度 ${card.doneCount}/${card.totalCount}`}>
-            <span className="tf-progress-bar" style={{ width: `${Math.round(progressRatio(card) * 100)}%` }} />
-          </span>
-          <span className="tf-card-meta">
-            <span>{statusLabel(task.status)}</span>
-            <span>· {card.doneCount}/{card.totalCount} done</span>
-            {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
-          </span>
-        </>
-      )}
+      {task.description !== '' && <span className="tf-card-desc">{task.description}</span>}
+      <span className="tf-progress" role="img" aria-label={`进度 ${card.doneCount}/${card.totalCount}`}>
+        <span className="tf-progress-bar" style={{ width: `${Math.round(progressRatio(card) * 100)}%` }} />
+      </span>
       <span className="tf-card-meta">
-        <span>{relativeTime(card.lastActivity)}</span>
-        {card.awaitingHuman === 'permission' && <span className="tf-chip tf-chip-amber">执行需确认</span>}
-        {card.awaitingHuman === 'review' && <span className="tf-chip tf-chip-amber">等验收</span>}
+        <span className="tf-status-tag" data-status={task.status}>
+          <i aria-hidden="true" />
+          {statusLabel(task.status)}
+        </span>
+        {card.totalCount > 0 && (
+          <span>
+            <span className="tf-meta-strong">{card.doneCount}/{card.totalCount}</span> 子任务
+          </span>
+        )}
+        {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
+        {running && <span className="tf-card-spinner" aria-hidden="true" />}
+        {card.awaitingHuman === 'permission' && <span className="tf-chip tf-chip-warn">执行需确认</span>}
+        {card.awaitingHuman === 'review' && <span className="tf-chip tf-chip-warn">等验收</span>}
         {blocked && card.blockedReason !== undefined && (
           <span className="tf-chip" title={card.blockedReason}>受阻</span>
         )}
+        <span className="tf-time">{relativeTime(card.lastActivity)}</span>
       </span>
     </button>
   )
@@ -337,11 +354,13 @@ function DetailDrawer({
     <div className="tf-overlay" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
       <aside className="tf-drawer" role="dialog" aria-label={`任务详情 ${task.title}`}>
         <header className="tf-drawer-head">
-          <StatusDot status={task.status} />
+          <span className="tf-status-tag" data-status={task.status}>
+            <i aria-hidden="true" />
+            {statusLabel(task.status)}
+          </span>
           <span className="tf-drawer-title" title={task.title}>{task.title}</span>
-          <span className="tf-chip">{statusLabel(task.status)}</span>
           {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
-          <button type="button" className="tf-btn" onClick={onClose} aria-label="关闭">✕</button>
+          <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
         </header>
         <nav className="tf-tabs" role="tablist">
           {TABS.map(item => (
@@ -563,7 +582,7 @@ function ReviewTab({
                 disabled={busy}
                 onClick={() => void act({ type: 'approveTask' })}
               >
-                批准（全部通过 → done）
+                批准 · 全部通过（→ done）
               </button>
             </div>
             <div className="tf-field">
@@ -579,7 +598,7 @@ function ReviewTab({
             <div className="tf-actions">
               {atLimit ? (
                 <>
-                  <span className="tf-chip tf-chip-amber">已达迭代上限（{task.round}/{task.maxRounds}）</span>
+                  <span className="tf-chip tf-chip-warn">已达迭代上限（{task.round}/{task.maxRounds}）</span>
                   <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'raiseMaxRounds', maxRounds: (task.maxRounds ?? 3) + 2 })}>提高上限并打回</button>
                 </>
               ) : (
@@ -589,7 +608,7 @@ function ReviewTab({
                   disabled={busy || !canReject || comment.trim().length === 0}
                   onClick={() => void act({ type: 'rejectSubtask', comment })}
                 >
-                  打回{canReject ? `（默认选中 ${inReview.length} 个子任务）` : '（无可打回子任务）'}
+                  打回并继续迭代{canReject ? `（默认选中 ${inReview.length} 个子任务）` : '（无可打回子任务）'}
                 </button>
               )}
             </div>
@@ -627,46 +646,31 @@ function EvidenceCard({ sub }: { sub: Subtask }): JSX.Element {
   return (
     <div className="tf-item">
       <div className="tf-item-head">
-        <StatusDot status={sub.status} />
         <span className="tf-item-title">{sub.title}</span>
         <span className="tf-chip">第 {sub.round} 轮证据</span>
       </div>
-      <div className="tf-section">
-        <span className="tf-section-title">变更摘要</span>
-        <span>{evidence.changesSummary}</span>
-      </div>
+      <span className="tf-evidence-label">变更摘要：{evidence.changesSummary}</span>
       {evidence.refs.diffSummary !== undefined && (
-        <div className="tf-section">
-          <span className="tf-section-title">diff</span>
-          <span className="tf-hint">{evidence.refs.diffSummary}</span>
-        </div>
+        <span className="tf-evidence-diff">{evidence.refs.diffSummary}</span>
       )}
-      <div className="tf-section">
-        <span className="tf-section-title">验证记录（{evidence.verification.length}）</span>
-        {evidence.verification.map((record, index) => (
-          <div key={index}>
-            <div className="tf-item-head">
-              <span className={`tf-verdict tf-verdict-${record.passed ? 'pass' : 'fail'}`}>{record.passed ? '通过' : '失败'}</span>
-              <span className="tf-ac-id">{record.label}</span>
-            </div>
-            <pre className="tf-verify">{record.output}</pre>
+      {evidence.verification.map((record, index) => (
+        <div key={index}>
+          <div className="tf-item-head">
+            <span className={`tf-verdict tf-verdict-${record.passed ? 'pass' : 'fail'}`}>{record.passed ? '通过' : '失败'}</span>
+            <span className="tf-ac-id">{record.label}</span>
           </div>
-        ))}
-      </div>
-      <div className="tf-section">
-        <span className="tf-section-title">逐条自检（对照验收标准）</span>
+          <pre className="tf-verify">{record.output}</pre>
+        </div>
+      ))}
+      <span className="tf-section-title">逐条自检（对照验收标准）</span>
+      <div className="tf-evidence-checks">
         {sub.acceptance.map(item => {
           const check = checkById.get(item.id)
           return (
-            <div className="tf-item" key={item.id}>
-              <div className="tf-ac">
-                <span className="tf-ac-id">{item.id}</span>
-                <span>{item.text}</span>
-              </div>
-              <div className="tf-ac">
-                <span className={`tf-verdict tf-verdict-${check?.verdict ?? 'partial'}`}>{check?.verdict === 'pass' ? 'pass' : check?.verdict === 'partial' ? 'partial' : 'fail'}</span>
-                <span>{check?.note ?? '（缺自检条目）'}</span>
-              </div>
+            <div className="tf-ac" key={item.id}>
+              <span className="tf-ac-id">{item.id}</span>
+              <span className={`tf-verdict tf-verdict-${check?.verdict ?? 'partial'}`}>{check?.verdict === 'pass' ? 'pass' : check?.verdict === 'partial' ? 'partial' : 'fail'}</span>
+              <span>{check?.note ?? '（缺自检条目）'}</span>
             </div>
           )
         })}
@@ -739,7 +743,7 @@ function Drawer({ title, onClose, children }: { title: string; onClose: () => vo
       <aside className="tf-drawer" role="dialog" aria-label={title}>
         <header className="tf-drawer-head">
           <span className="tf-drawer-title">{title}</span>
-          <button type="button" className="tf-btn" onClick={onClose} aria-label="关闭">✕</button>
+          <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
         </header>
         <div className="tf-drawer-body">{children}</div>
       </aside>
@@ -750,9 +754,9 @@ function Drawer({ title, onClose, children }: { title: string; onClose: () => vo
 function StatusDot({ status }: { status: Task['status'] | Subtask['status'] }): JSX.Element {
   const dot =
     status === 'done' ? 'tf-dot-green'
-    : status === 'review' ? 'tf-dot-amber'
+    : status === 'review' ? 'tf-dot-blue'
     : status === 'blocked' || status === 'rejected' ? 'tf-dot-red'
-    : status === 'in-progress' || status === 'decomposing' ? 'tf-dot-blue'
+    : status === 'in-progress' || status === 'decomposing' ? 'tf-dot-amber'
     : 'tf-dot-gray'
   return <span className={`tf-status-dot ${dot}`} aria-hidden="true" />
 }
