@@ -1,0 +1,699 @@
+<!doctype html>
+<!--
+  dsh-taskflow UI 重设计 · 静态预览稿（不接后端，假数据）
+  打开方式：浏览器直接打开本文件即可。
+  - 右下角控制条：切换 方案一/二/三 与 浅色/深色
+  - 点击任意卡片：查看详情抽屉（验收页形态）
+  色板取自 dsh 0.1.2-rc.1 宿主真实 token（dsh-client-ui-theme），变量名与宿主一致。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-taskflow · UI 预览稿</title>
+<style>
+/* ============ 宿主真实 token（浅色 :root / 深色 body.dark）============ */
+:root {
+  --dsw-alias-bg-base: #ffffff;
+  --dsw-alias-bg-layer-1: #f9fafb;
+  --dsw-alias-bg-layer-2: #f5f6f7;
+  --dsw-alias-bg-layer-3: #f1f3f5;
+  --dsw-specific-sidebar-fill: #f9fafb;
+  --dsw-specific-nav-hover: #f1f3f5;
+  --dsw-specific-nav-active: #ebeef2;
+  --dsw-specific-nav-active-accent: #4176e6;
+  --dsw-alias-border-l1: rgba(0,0,0,0.04);
+  --dsw-alias-border-l2: rgba(0,0,0,0.10);
+  --dsw-alias-border-l3: rgba(0,0,0,0.12);
+  --dsw-alias-border-l4: rgba(0,0,0,0.16);
+  --dsw-alias-label-primary: #0f1115;
+  --dsw-alias-label-secondary: #61666b;
+  --dsw-alias-label-tertiary: #81858c;
+  --dsw-alias-label-caption: #adb2b8;
+  --dsw-alias-interactive-bg-hover: rgba(38,49,72,0.06);
+  --dsw-alias-interactive-bg-hover-danger: rgba(236,19,19,0.05);
+  --dsw-alias-button-info-fill: #4176e6;
+  --dsw-alias-button-info-hover: #679efe;
+  --on-info: #ffffff;
+  --dsw-alias-state-business-primary: #4176e6;
+  --dsw-alias-state-business-tertiary: #e4edfd;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-success-tertiary: #e6faed;
+  --ink-green: #17a34c;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-tertiary: #fef5e7;
+  --dsw-alias-state-warn-label: #dd8629;
+  --dsw-alias-state-error-primary: #ec1313;
+  --dsw-alias-state-error-secondary: #f25a5a;
+  --dsw-alias-state-error-tertiary: #fee2e2;
+  --dsw-shadow-lv1: 0 2px 4px rgba(0,0,0,0.05);
+  --dsw-shadow-lv2: 0 4px 12px rgba(0,0,0,0.03), 0 2px 8px rgba(0,0,0,0.04);
+  --dsw-shadow-lv3: 0 0 1px rgba(0,0,0,0.2), 0 0 4px rgba(0,0,0,0.02), 0 12px 32px rgba(0,0,0,0.08);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+}
+body.dark {
+  --dsw-alias-bg-base: #151517;
+  --dsw-alias-bg-layer-1: #232324;
+  --dsw-alias-bg-layer-2: #2c2c2e;
+  --dsw-alias-bg-layer-3: #353638;
+  --dsw-specific-sidebar-fill: #1b1b1c;
+  --dsw-specific-nav-hover: #2c2c2e;
+  --dsw-specific-nav-active: #43454a;
+  --dsw-specific-nav-active-accent: #679efe;
+  --dsw-alias-border-l1: rgba(255,255,255,0.06);
+  --dsw-alias-border-l2: rgba(255,255,255,0.12);
+  --dsw-alias-border-l3: rgba(255,255,255,0.16);
+  --dsw-alias-border-l4: rgba(255,255,255,0.20);
+  --dsw-alias-label-primary: #f9fafb;
+  --dsw-alias-label-secondary: #b3b7bd;
+  --dsw-alias-label-tertiary: #90959b;
+  --dsw-alias-label-caption: #6f747a;
+  --dsw-alias-interactive-bg-hover: rgba(255,255,255,0.08);
+  --dsw-alias-interactive-bg-hover-danger: rgba(242,90,90,0.15);
+  --dsw-alias-button-info-fill: #679efe;
+  --dsw-alias-button-info-hover: #4176e6;
+  --on-info: #0f1115;
+  --dsw-alias-state-business-primary: #679efe;
+  --dsw-alias-state-business-tertiary: #34415b;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-success-tertiary: #233c2c;
+  --ink-green: #4ed17e;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-tertiary: #27241f;
+  --dsw-alias-state-warn-label: #f7ad31;
+  --dsw-alias-state-error-primary: #f25a5a;
+  --dsw-alias-state-error-secondary: #f25a5a;
+  --dsw-alias-state-error-tertiary: #570c0c;
+  --dsw-shadow-lv1: 0 2px 4px rgba(0,0,0,0.4);
+  --dsw-shadow-lv2: 0 4px 12px rgba(0,0,0,0.35);
+  --dsw-shadow-lv3: 0 0 1px rgba(0,0,0,0.5), 0 12px 32px rgba(0,0,0,0.5);
+}
+
+/* ============ 基础 ============ */
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; font-family: var(--font); font-size: 14px; line-height: 1.5;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+svg { display: block; }
+
+/* ============ 壳层：左栏 + 内容区 ============ */
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+/* —— 左侧栏（模拟 dsh 宿主，除「任务看板」入口外均为宿主自有 UI 形态）—— */
+.sidebar {
+  flex: none; width: 248px; display: flex; flex-direction: column;
+  background: var(--dsw-specific-sidebar-fill);
+  border-right: 1px solid var(--dsw-alias-border-l1);
+  padding: 12px 10px; gap: 2px;
+}
+.brand { display: flex; align-items: center; gap: 8px; padding: 4px 8px 12px; }
+.brand-mark {
+  width: 20px; height: 20px; border-radius: 6px; flex: none;
+  background: var(--dsw-alias-button-info-fill); color: var(--on-info);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+.brand-name { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  height: 32px; padding: 0 8px; border-radius: 8px;
+  font-size: 13px; color: var(--dsw-alias-label-secondary);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.nav-item:hover { background: var(--dsw-specific-nav-hover); color: var(--dsw-alias-label-primary); }
+.nav-item.active {
+  background: var(--dsw-specific-nav-active); color: var(--dsw-alias-label-primary); font-weight: 500;
+  box-shadow: inset 3px 0 0 0 var(--dsw-specific-nav-active-accent);
+}
+.nav-item svg { flex: none; color: inherit; }
+.nav-item .nav-badge {
+  margin-left: auto; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary);
+  border-radius: 999px; padding: 0 6px; line-height: 16px;
+}
+.side-gap { height: 10px; flex: none; }
+.side-section { font-size: 11px; color: var(--dsw-alias-label-caption); padding: 8px 8px 4px; }
+.side-session { font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.side-spacer { flex: 1; }
+.side-foot { display: flex; align-items: center; gap: 8px; padding: 8px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.side-avatar {
+  width: 22px; height: 22px; border-radius: 50%; flex: none;
+  background: var(--dsw-alias-bg-layer-3); color: var(--dsw-alias-label-secondary);
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
+}
+.side-foot-name { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+
+/* —— 内容区 —— */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+.toolbar {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.page-title { font-size: 15px; font-weight: 700; margin-right: 4px; }
+.search {
+  display: flex; align-items: center; gap: 6px; width: 220px; height: 30px;
+  padding: 0 10px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+}
+.search input {
+  flex: 1; min-width: 0; border: none; outline: none; background: none;
+  font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary);
+}
+.search input::placeholder { color: var(--dsw-alias-label-tertiary); }
+.filter {
+  height: 30px; padding: 0 4px 0 8px; border-radius: 8px; font-size: 13px;
+  color: var(--dsw-alias-label-secondary); transition: background-color 0.1s ease;
+}
+.filter:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.toolbar-spacer { flex: 1; }
+.review-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary);
+}
+.review-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-warn-primary); }
+
+/* —— 按钮（全局唯一两种形态：信息蓝填充 / 幽灵，无灰描边盒）—— */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 14px;
+  border-radius: 8px; font-size: 13px; font-weight: 600; white-space: nowrap;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.btn-primary { background: var(--dsw-alias-button-info-fill); color: var(--on-info); }
+.btn-primary:hover { background: var(--dsw-alias-button-info-hover); }
+.btn-ghost { color: var(--dsw-alias-label-secondary); }
+.btn-ghost:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.btn-danger { color: var(--dsw-alias-state-error-secondary); }
+.btn-danger:hover { background: var(--dsw-alias-interactive-bg-hover-danger); }
+.btn-link { height: auto; padding: 0; color: var(--dsw-alias-state-business-primary); font-weight: 500; font-size: 12.5px; }
+.btn-link:hover { text-decoration: underline; }
+
+/* ============ 看板：四列 + 卡片（共享结构，三套皮肤）============ */
+.cols {
+  flex: 1; min-height: 0; display: grid; grid-auto-flow: column;
+  grid-auto-columns: minmax(250px, 1fr); gap: 0;
+  overflow-x: auto; overflow-y: hidden; padding: 16px 20px 8px;
+}
+.col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.col-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 2px 4px 10px; }
+.col-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.col-count {
+  font-size: 11px; font-variant-numeric: tabular-nums; line-height: 18px; padding: 0 7px;
+  border-radius: 999px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2);
+}
+.col-count.hot { color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); }
+.col-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.col-empty { font-size: 12px; color: var(--dsw-alias-label-caption); padding: 18px 4px; }
+
+.card {
+  display: flex; flex-direction: column; gap: 6px; text-align: left; width: 100%;
+  padding: 11px 12px; border-radius: 10px; color: var(--dsw-alias-label-primary);
+  transition: background-color 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
+}
+.card-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; }
+.card-desc {
+  font-size: 12px; line-height: 1.45; color: var(--dsw-alias-label-secondary);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.card-progress { height: 4px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; }
+.card-progress i { display: block; height: 100%; border-radius: 999px; background: var(--dsw-alias-state-business-primary); }
+.card[data-status='done'] .card-progress i { background: var(--dsw-alias-state-success-primary); }
+.card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); flex-wrap: wrap; }
+.card-meta .time { margin-left: auto; font-size: 11px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.meta-strong { color: var(--dsw-alias-label-primary); font-weight: 500; }
+.chip {
+  font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
+}
+.chip-warn { background: var(--dsw-alias-state-warn-tertiary); color: var(--dsw-alias-state-warn-label); font-weight: 600; }
+.status-tag { font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.status-tag i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.status-tag[data-status='ready'], .status-tag[data-status='draft'] { color: var(--dsw-alias-label-tertiary); }
+.status-tag[data-status='decomposing'], .status-tag[data-status='in-progress'] { color: var(--dsw-alias-state-warn-label); }
+.status-tag[data-status='review'] { color: var(--dsw-alias-state-business-primary); }
+.status-tag[data-status='blocked'] { color: var(--dsw-alias-state-error-secondary); }
+.status-tag[data-status='done'] { color: var(--ink-green); }
+.spinner {
+  width: 10px; height: 10px; flex: none; border-radius: 50%;
+  border: 2px solid var(--dsw-alias-state-warn-primary); border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ===== 皮肤一「素卡」：白卡 + 淡彩状态标签（最贴近宿主原生质感）===== */
+body[data-opt='1'] .col + .col { border-left: 1px solid var(--dsw-alias-border-l1); }
+body[data-opt='1'] .col-head, body[data-opt='1'] .col-body { padding-left: 12px; padding-right: 12px; }
+body[data-opt='1'] .col-head { padding-left: 16px; padding-right: 16px; }
+body[data-opt='1'] .col-body { gap: 6px; padding-bottom: 12px; }
+body[data-opt='1'] .card { background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l2); }
+body[data-opt='1'] .card:hover { border-color: var(--dsw-alias-border-l3); box-shadow: var(--dsw-shadow-lv1); }
+body[data-opt='1'] .status-tag[data-status='decomposing'], body[data-opt='1'] .status-tag[data-status='in-progress'],
+body[data-opt='1'] .status-tag[data-status='review'], body[data-opt='1'] .status-tag[data-status='blocked'],
+body[data-opt='1'] .status-tag[data-status='done'] {
+  font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 999px; gap: 0;
+}
+body[data-opt='1'] .status-tag i { display: none; }
+body[data-opt='1'] .status-tag[data-status='decomposing'], body[data-opt='1'] .status-tag[data-status='in-progress'] { background: var(--dsw-alias-state-warn-tertiary); }
+body[data-opt='1'] .status-tag[data-status='review'] { background: var(--dsw-alias-state-business-tertiary); }
+body[data-opt='1'] .status-tag[data-status='blocked'] { background: var(--dsw-alias-state-error-tertiary); }
+body[data-opt='1'] .status-tag[data-status='done'] { background: var(--dsw-alias-state-success-tertiary); }
+body[data-opt='1'] .col-count.hot, body[data-opt='1'] .col-count { line-height: 18px; }
+
+/* ===== 皮肤二「清单」：无容器纯排版，发丝线分隔，最轻 ===== */
+body[data-opt='2'] .cols { gap: 0; }
+body[data-opt='2'] .col + .col { border-left: 1px solid var(--dsw-alias-border-l1); }
+body[data-opt='2'] .col-head { padding-left: 14px; padding-right: 14px; }
+body[data-opt='2'] .col-head .col-title { display: inline-flex; align-items: center; gap: 7px; }
+body[data-opt='2'] .col-head .col-title::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-label-caption);
+}
+body[data-opt='2'] .col[data-col='inProgress'] .col-title::before { background: var(--dsw-alias-state-warn-primary); }
+body[data-opt='2'] .col[data-col='review'] .col-title::before { background: var(--dsw-alias-state-business-primary); }
+body[data-opt='2'] .col[data-col='done'] .col-title::before { background: var(--dsw-alias-state-success-primary); }
+body[data-opt='2'] .col-body { padding: 0 14px 12px; }
+body[data-opt='2'] .card { padding: 10px 8px; border-radius: 8px; }
+body[data-opt='2'] .card + .card { border-top: 1px solid var(--dsw-alias-border-l1); }
+body[data-opt='2'] .card:hover { background: var(--dsw-alias-interactive-bg-hover); }
+body[data-opt='2'] .card-title { font-size: 13px; }
+body[data-opt='2'] .card-progress { height: 2px; margin: 2px 0; }
+body[data-opt='2'] .card[data-status='review'] .card-title { color: var(--dsw-alias-state-business-primary); }
+body[data-opt='2'] .card[data-status='blocked'] .card-title { color: var(--dsw-alias-state-error-secondary); }
+
+/* ===== 皮肤三「分栏」：淡灰栏底 + 白卡 + 左侧状态色条（看板感最强）===== */
+body[data-opt='3'] .cols { gap: 12px; }
+body[data-opt='3'] .col { background: var(--dsw-alias-bg-layer-2); border-radius: 12px; padding: 6px 8px 8px; }
+body[data-opt='3'] .col-head { padding: 8px 6px 8px; }
+body[data-opt='3'] .col-body { gap: 8px; }
+body[data-opt='3'] .card {
+  background: var(--dsw-alias-bg-base); border-radius: 8px; position: relative; padding: 10px 12px 10px 15px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+body.dark[data-opt='3'] .card { box-shadow: none; }
+body[data-opt='3'] .card::before {
+  content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 999px;
+  background: var(--dsw-alias-label-caption); opacity: 0.6;
+}
+body[data-opt='3'] .card[data-status='decomposing']::before, body[data-opt='3'] .card[data-status='in-progress']::before { background: var(--dsw-alias-state-warn-primary); opacity: 1; }
+body[data-opt='3'] .card[data-status='review']::before { background: var(--dsw-alias-state-business-primary); opacity: 1; }
+body[data-opt='3'] .card[data-status='blocked']::before { background: var(--dsw-alias-state-error-primary); opacity: 1; }
+body[data-opt='3'] .card[data-status='done']::before { background: var(--dsw-alias-state-success-primary); opacity: 1; }
+body[data-opt='3'] .card:hover { box-shadow: var(--dsw-shadow-lv1); }
+body[data-opt='3'] .status-tag { color: var(--dsw-alias-label-secondary) !important; font-weight: 500; }
+body[data-opt='3'] .status-tag i { background: currentColor; }
+body[data-opt='3'] .card[data-status='in-progress'] .status-tag i { background: var(--dsw-alias-state-warn-primary); }
+body[data-opt='3'] .card[data-status='review'] .status-tag i { background: var(--dsw-alias-state-business-primary); }
+body[data-opt='3'] .card[data-status='blocked'] .status-tag i { background: var(--dsw-alias-state-error-secondary); }
+body[data-opt='3'] .card[data-status='done'] .status-tag i { background: var(--ink-green); }
+body[data-opt='3'] .col { border: 1px solid var(--dsw-alias-border-l1); }
+
+/* ============ 详情抽屉 ============ */
+.mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 40;
+  opacity: 0; pointer-events: none; transition: opacity 0.15s ease;
+}
+.mask.open { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(480px, 94vw); z-index: 41;
+  background: var(--dsw-alias-bg-base); border-left: 1px solid var(--dsw-alias-border-l2);
+  box-shadow: var(--dsw-shadow-lv3); display: flex; flex-direction: column;
+  transform: translateX(24px); opacity: 0; pointer-events: none;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.drawer.open { transform: none; opacity: 1; pointer-events: auto; }
+.drawer-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px 12px; }
+.drawer-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn {
+  width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+.icon-btn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.tabs { display: flex; gap: 18px; padding: 0 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); flex: none; }
+.tab {
+  padding: 6px 2px 9px; font-size: 13px; color: var(--dsw-alias-label-secondary);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--dsw-alias-label-primary); }
+.tab.active { color: var(--dsw-alias-label-primary); font-weight: 600; border-bottom-color: var(--dsw-alias-state-business-primary); }
+.drawer-body { flex: 1; overflow-y: auto; padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+.section { display: flex; flex-direction: column; gap: 8px; }
+.section-title { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-tertiary); letter-spacing: 0.02em; }
+.kv { display: grid; grid-template-columns: 72px 1fr; gap: 6px 12px; font-size: 13px; margin: 0; }
+.kv dt { color: var(--dsw-alias-label-secondary); }
+.kv dd { margin: 0; }
+.ac-row { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.ac-id { font-family: var(--mono); font-size: 11px; color: var(--dsw-alias-label-tertiary); flex: none; }
+.sub-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--dsw-alias-border-l1); }
+.sub-row:first-of-type { border-top: none; padding-top: 0; }
+.sub-head { display: flex; align-items: center; gap: 8px; }
+.sub-title { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; }
+.evidence {
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px; background: var(--dsw-alias-bg-base);
+}
+.evidence-label { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+pre.verify {
+  margin: 6px 0 0; background: var(--dsw-alias-bg-layer-2); border-radius: 8px; padding: 10px 12px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55; color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow-y: auto;
+}
+.verdict { font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 8px; border-radius: 999px; }
+.verdict-pass { color: var(--ink-green); background: var(--dsw-alias-state-success-tertiary); }
+.verdict-fail { color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-state-error-tertiary); }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.input {
+  font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base); border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 8px; padding: 8px 10px; outline: none; resize: vertical; min-height: 64px;
+  transition: border-color 0.1s ease;
+}
+.input:focus { border-color: var(--dsw-alias-state-business-primary); }
+.input::placeholder { color: var(--dsw-alias-label-tertiary); }
+.actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hint { font-size: 12px; color: var(--dsw-alias-label-tertiary); line-height: 1.5; }
+.tl-row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid var(--dsw-alias-border-l1); font-size: 13px; }
+.tl-row:first-of-type { border-top: none; padding-top: 0; }
+.tl-time { font-size: 11px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.tl-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tl-actor { font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.tl-detail { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 2px; }
+
+/* ============ 预览控制条（meta UI，非设计稿一部分）============ */
+.switcher {
+  position: fixed; right: 16px; bottom: 16px; z-index: 60;
+  background: #232324; color: #f9fafb; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; width: 232px;
+  font-size: 12px;
+}
+.switcher-title { font-size: 11px; color: #90959b; letter-spacing: 0.04em; }
+.switcher-row { display: flex; gap: 6px; }
+.sw-btn {
+  flex: 1; height: 28px; border-radius: 7px; font-size: 12px; color: #b3b7bd;
+  transition: background-color 0.1s ease, color 0.1s ease; white-space: nowrap; padding: 0 6px;
+}
+.sw-btn:hover { background: rgba(255,255,255,0.08); color: #f9fafb; }
+.sw-btn.on { background: #4176e6; color: #fff; font-weight: 600; }
+.sw-note { color: #90959b; line-height: 1.5; }
+</style>
+</head>
+<body data-opt="1">
+
+<div class="app">
+  <!-- ===== 左侧栏：宿主壳层模拟 ===== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">D</span>
+      <span class="brand-name">DeepSeek Harness</span>
+    </div>
+
+    <!-- 任务看板入口：紧随品牌行之下（本次布局需求），带待验收徽标 -->
+    <button class="nav-item active">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="5" height="13" rx="1.5"/><rect x="10" y="3" width="5" height="8" rx="1.5"/><rect x="17" y="3" width="5" height="17" rx="1.5"/></svg>
+      <span>任务看板</span>
+      <span class="nav-badge">1</span>
+    </button>
+    <div class="side-gap"></div>
+
+    <button class="nav-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20l4.5-1L20 7.5a2.1 2.1 0 0 0-3-3L5.5 16 4 20z"/></svg>
+      <span>新会话</span>
+    </button>
+    <div class="side-section">今天</div>
+    <button class="nav-item side-session"><span>重设计 taskflow 看板 UI</span></button>
+    <button class="nav-item side-session"><span>排查 SSE 断连问题</span></button>
+    <button class="nav-item side-session"><span>M2 依赖调度方案讨论</span></button>
+    <div class="side-section">昨天</div>
+    <button class="nav-item side-session"><span>迁移数据库分片预演</span></button>
+    <button class="nav-item side-session"><span>计算器百分比按钮</span></button>
+    <div class="side-spacer"></div>
+    <div class="side-foot">
+      <span class="side-avatar">L</span>
+      <span class="side-foot-name">设置与成员</span>
+      <span style="flex:1"></span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#81858c" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h9m5 0h2M4 16h3m5 0h8"/><circle cx="15.5" cy="8" r="2"/><circle cx="9.5" cy="16" r="2"/></svg>
+    </div>
+  </aside>
+
+  <!-- ===== 右侧内容区：任务看板 ===== -->
+  <main class="main">
+    <div class="toolbar">
+      <span class="page-title">任务看板</span>
+      <label class="search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <input type="search" placeholder="搜索任务">
+      </label>
+      <button class="filter">全部状态 ▾</button>
+      <span class="toolbar-spacer"></span>
+      <span class="review-pill"><i></i>待验收 1</span>
+      <button class="btn btn-primary">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+        新建任务
+      </button>
+    </div>
+
+    <div class="cols">
+      <!-- 待办 -->
+      <section class="col" data-col="todo">
+        <div class="col-head"><span class="col-title">待办</span><span class="col-count">2</span></div>
+        <div class="col-body">
+          <button class="card" data-status="ready" onclick="openDrawer()">
+            <span class="card-title">修复登录会话超时</span>
+            <span class="card-desc">会话 30 分钟无操作被登出，预期静默续期。</span>
+            <span class="card-progress"><i style="width:0%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="ready"><i></i>就绪</span>
+              <span>3 条验收</span>
+              <span class="time">2 小时前</span>
+            </span>
+          </button>
+          <button class="card" data-status="draft" onclick="openDrawer()">
+            <span class="card-title">编写插件发布指南</span>
+            <span class="card-progress"><i style="width:0%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="draft"><i></i>草稿</span>
+              <span>尚未拆解</span>
+              <span class="time">昨天</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 实现中 -->
+      <section class="col" data-col="inProgress">
+        <div class="col-head"><span class="col-title">实现中</span><span class="col-count">3</span></div>
+        <div class="col-body">
+          <button class="card" data-status="in-progress" onclick="openDrawer()">
+            <span class="card-title">给计算器加上百分比按钮</span>
+            <span class="card-progress"><i style="width:40%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="in-progress"><i></i>执行中</span>
+              <span><span class="meta-strong">2/5</span> 子任务</span>
+              <span class="spinner"></span>
+              <span class="time">刚刚</span>
+            </span>
+          </button>
+          <button class="card" data-status="in-progress" onclick="openDrawer()">
+            <span class="card-title">重构支付回调模块</span>
+            <span class="card-progress"><i style="width:75%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="in-progress"><i></i>执行中</span>
+              <span><span class="meta-strong">3/4</span> 子任务</span>
+              <span class="chip">第 2 轮</span>
+              <span class="time">5 分钟前</span>
+            </span>
+          </button>
+          <button class="card" data-status="in-progress" onclick="openDrawer()">
+            <span class="card-title">接入新模型网关</span>
+            <span class="card-progress"><i style="width:25%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="in-progress"><i></i>执行中</span>
+              <span class="chip chip-warn">执行需确认</span>
+              <span class="time">1 小时前</span>
+            </span>
+          </button>
+          <button class="card" data-status="blocked" onclick="openDrawer()">
+            <span class="card-title">升级构建依赖到 LTS</span>
+            <span class="card-progress"><i style="width:50%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="blocked"><i></i>受阻</span>
+              <span>循环依赖</span>
+              <span class="chip">第 3 轮</span>
+              <span class="time">3 小时前</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 待验收 -->
+      <section class="col" data-col="review">
+        <div class="col-head"><span class="col-title">待验收</span><span class="col-count hot">1</span></div>
+        <div class="col-body">
+          <button class="card" data-status="review" onclick="openDrawer()">
+            <span class="card-title">迁移用户数据库到新分片方案</span>
+            <span class="card-desc">双写切换完成，历史数据已校验一致。</span>
+            <span class="card-progress"><i style="width:100%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="review"><i></i>待验收</span>
+              <span><span class="meta-strong">3/3</span> 子任务</span>
+              <span class="chip">第 2 轮</span>
+              <span class="time">10 分钟前</span>
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 已完成 -->
+      <section class="col" data-col="done">
+        <div class="col-head"><span class="col-title">已完成</span><span class="col-count">3</span></div>
+        <div class="col-body">
+          <button class="card" data-status="done" onclick="openDrawer()">
+            <span class="card-title">优化看板首屏加载</span>
+            <span class="card-progress"><i style="width:100%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="done"><i></i>已完成</span>
+              <span><span class="meta-strong">4/4</span> 子任务</span>
+              <span class="time">昨天</span>
+            </span>
+          </button>
+          <button class="card" data-status="done" onclick="openDrawer()">
+            <span class="card-title">修复时区导致的日期偏移</span>
+            <span class="card-progress"><i style="width:100%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="done"><i></i>已完成</span>
+              <span><span class="meta-strong">2/2</span> 子任务</span>
+              <span class="time">周一</span>
+            </span>
+          </button>
+          <button class="card" data-status="done" onclick="openDrawer()">
+            <span class="card-title">补充 e2e 主流程测试</span>
+            <span class="card-progress"><i style="width:100%"></i></span>
+            <span class="card-meta">
+              <span class="status-tag" data-status="done"><i></i>已完成</span>
+              <span><span class="meta-strong">6/6</span> 子任务</span>
+              <span class="time">周一</span>
+            </span>
+          </button>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<!-- ===== 详情抽屉（验收页形态，点击任意卡片打开）===== -->
+<div class="mask" id="mask" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-label="任务详情">
+  <div class="drawer-head">
+    <span class="status-tag" data-status="review"><i></i>待验收</span>
+    <span class="drawer-title">迁移用户数据库到新分片方案</span>
+    <span class="chip">第 2 轮</span>
+    <button class="icon-btn" onclick="closeDrawer()" aria-label="关闭">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <nav class="tabs">
+    <button class="tab">合同</button>
+    <button class="tab">子任务</button>
+    <button class="tab active">验收</button>
+    <button class="tab">历史</button>
+    <button class="tab">拆解记录</button>
+  </nav>
+  <div class="drawer-body">
+    <div class="section">
+      <span class="section-title">证据报告卡 · 分片写入切换</span>
+      <div class="evidence">
+        <div class="sub-head">
+          <span class="sub-title">分片写入切换与数据校验</span>
+          <span class="chip">第 2 轮证据</span>
+        </div>
+        <span class="evidence-label">变更摘要：双写开关切换至新分片，校验脚本比对 1.2M 行记录一致。</span>
+        <span class="evidence-label" style="font-family: var(--mono); font-size: 11.5px;">+212 −44 · src/sharding/router.ts, test/router.spec.ts</span>
+        <div>
+          <span class="verdict verdict-pass">通过</span>
+          <span class="evidence-label" style="font-family: var(--mono); font-size: 11.5px;">pnpm test</span>
+          <pre class="verify">✓ test/router.spec.ts (8 tests) 42ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)</pre>
+        </div>
+        <div class="ac-row"><span class="ac-id">ac_1</span><span class="verdict verdict-pass">pass</span><span class="evidence-label">双写期间零丢失，抽样比对一致</span></div>
+        <div class="ac-row"><span class="ac-id">ac_2</span><span class="verdict verdict-pass">pass</span><span class="evidence-label">切换耗时 380ms，低于 1s 阈值</span></div>
+        <div class="ac-row"><span class="ac-id">ac_3</span><span class="verdict verdict-pass">pass</span><span class="evidence-label">回滚开关验证可用</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <span class="section-title">验收操作</span>
+      <div class="actions">
+        <button class="btn btn-primary">批准 · 全部通过</button>
+        <button class="btn btn-ghost">查看子任务证据（3）</button>
+      </div>
+      <div class="field" style="margin-top: 4px;">
+        <label>打回批语（必填，原文注入下一轮执行）</label>
+        <textarea class="input" placeholder="说清哪里不满足验收标准、期望的修正方向"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn btn-danger">打回并继续迭代</button>
+        <span class="hint">迭代上限 3 轮，当前第 2 轮</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <span class="section-title">最近动态</span>
+      <div class="tl-row">
+        <span class="tl-time">09-10 14:32</span>
+        <div><div class="tl-main"><span class="tl-actor">AI</span><span style="font-weight:600">子任务「分片写入切换」提交证据</span></div><div class="tl-detail">3/3 自检通过，验证 pnpm test 全绿</div></div>
+      </div>
+      <div class="tl-row">
+        <span class="tl-time">09-10 13:05</span>
+        <div><div class="tl-main"><span class="tl-actor">人</span><span>打回 · 第 1 轮</span></div><div class="tl-detail" style="border-left: 2px solid var(--dsw-alias-state-error-secondary); padding-left: 8px;">回滚开关没有覆盖验证，补上再提交。</div></div>
+      </div>
+      <div class="tl-row">
+        <span class="tl-time">09-10 11:40</span>
+        <div><div class="tl-main"><span class="tl-actor">AI</span><span>任务进入实现中</span></div><div class="tl-detail">拆解为 3 个子任务，自动开工</div></div>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- ===== 预览控制条 ===== -->
+<div class="switcher">
+  <span class="switcher-title">UI 方案预览 · 右下角控制条</span>
+  <div class="switcher-row">
+    <button class="sw-btn on" data-opt="1" onclick="setOpt(1, this)">一 · 素卡</button>
+    <button class="sw-btn" data-opt="2" onclick="setOpt(2, this)">二 · 清单</button>
+    <button class="sw-btn" data-opt="3" onclick="setOpt(3, this)">三 · 分栏</button>
+  </div>
+  <div class="switcher-row">
+    <button class="sw-btn" style="flex:2" onclick="toggleTheme(this)">切换 深色 / 浅色</button>
+  </div>
+  <span class="sw-note">点击任意卡片可打开详情抽屉。三案共用宿主真实色板：纯白底 · DeepSeek 蓝 #4176e6 · 无灰描边按钮。</span>
+</div>
+
+<script>
+function setOpt(n, btn) {
+  document.body.dataset.opt = String(n)
+  document.querySelectorAll('.sw-btn[data-opt]').forEach(b => b.classList.remove('on'))
+  btn.classList.add('on')
+}
+function toggleTheme() {
+  document.body.classList.toggle('dark')
+}
+function openDrawer() {
+  document.getElementById('drawer').classList.add('open')
+  document.getElementById('mask').classList.add('open')
+}
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open')
+  document.getElementById('mask').classList.remove('open')
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer() })
+</script>
+</body>
+</html>
