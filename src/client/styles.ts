@@ -214,6 +214,41 @@ export const TASKFLOW_CSS = `
 .tf-ev-verify .tf-verify { max-height: 260px; margin-top: 4px; }
 .tf-ev > .tf-hint { padding-top: 2px; border-top: 1px solid ${V.borderL1}; }
 
+/* —— 交付物（§4.5b）：产物本体区 + 只读预览 —— */
+.tf-artifacts { border-left: 3px solid ${V.business}; padding-left: 10px; border-top: none; padding-top: 2px; }
+.tf-artifact { display: flex; flex-direction: column; gap: 4px; border: 1px solid ${V.borderL1}; border-radius: 10px; background: ${V.bgBase}; padding: 10px 12px; }
+.tf-artifact-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tf-artifact-icon { flex: none; font-size: 13px; }
+.tf-artifact-path { flex: 1; min-width: 0; font-family: ${V.codeFont}; font-size: 12.5px; color: ${V.label}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-artifact-meta { display: flex; flex-direction: column; gap: 2px; }
+.tf-artifact-desc { font-size: 12px; color: ${V.label2}; overflow-wrap: anywhere; }
+.tf-artifact-verified { font-size: 11.5px; color: ${V.label3}; overflow-wrap: anywhere; }
+.tf-artifact-preview { border-top: 1px solid ${V.borderL1}; margin-top: 6px; padding-top: 8px; }
+.tf-artifact-previewbar { font-size: 11.5px; color: ${V.label3}; margin-bottom: 6px; }
+
+/* —— 受限 Markdown 渲染（交付物预览正文）—— */
+.tf-md { font-size: 13px; line-height: 1.65; color: ${V.label}; overflow-wrap: anywhere; }
+.tf-md .tf-md-h { margin: 10px 0 6px; font-weight: 700; line-height: 1.35; }
+.tf-md .tf-md-h:first-child { margin-top: 0; }
+.tf-md .tf-md-h1 { font-size: 17px; border-bottom: 1px solid ${V.borderL1}; padding-bottom: 4px; }
+.tf-md .tf-md-h2 { font-size: 15px; border-bottom: 1px solid ${V.borderL1}; padding-bottom: 3px; }
+.tf-md .tf-md-h3 { font-size: 14px; }
+.tf-md .tf-md-h4, .tf-md .tf-md-h5, .tf-md .tf-md-h6 { font-size: 13px; color: ${V.label2}; }
+.tf-md .tf-md-p { margin: 6px 0; }
+.tf-md .tf-md-list { margin: 6px 0; padding-left: 22px; display: flex; flex-direction: column; gap: 3px; }
+.tf-md .tf-md-quote { margin: 6px 0; padding: 4px 12px; border-left: 3px solid ${V.borderL2}; color: ${V.label2}; }
+.tf-md .tf-md-hr { border: none; border-top: 1px solid ${V.borderL1}; margin: 10px 0; }
+.tf-md .tf-md-code { font-family: ${V.codeFont}; font-size: 12px; background: ${V.bgLayer2}; border-radius: 4px; padding: 1px 5px; }
+.tf-md .tf-md-pre { background: ${V.bgLayer2}; border-radius: 8px; padding: 10px 12px; overflow-x: auto; max-height: 320px; font-size: 12px; line-height: 1.55; margin: 6px 0; }
+.tf-md .tf-md-pre code { font-family: ${V.codeFont}; }
+.tf-md .tf-md-link { color: ${V.business}; text-decoration: none; }
+.tf-md .tf-md-link:hover { text-decoration: underline; }
+.tf-md .tf-md-tablewrap { overflow-x: auto; margin: 6px 0; border: 1px solid ${V.borderL1}; border-radius: 8px; }
+.tf-md .tf-md-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.tf-md .tf-md-table th { background: ${V.bgLayer2}; font-weight: 600; text-align: left; }
+.tf-md .tf-md-table th, .tf-md .tf-md-table td { padding: 6px 10px; border-bottom: 1px solid ${V.borderL1}; vertical-align: top; }
+.tf-md .tf-md-table tr:last-child td { border-bottom: none; }
+
 @media (max-width: 760px), (max-height: 560px) {
   .tf-overlay-center { padding: 0; }
   .tf-modal { width: 100%; height: 100%; border-radius: 0; border: none; }

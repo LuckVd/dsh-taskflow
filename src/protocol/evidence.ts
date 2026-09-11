@@ -10,13 +10,15 @@
  * @module dsh-taskflow/protocol
  */
 
-import { MAX_VERIFICATION_OUTPUT_BYTES } from './types.ts'
+import { MAX_EVIDENCE_ARTIFACTS, MAX_VERIFICATION_OUTPUT_BYTES } from './types.ts'
+import type { Artifact } from './types.ts'
 
 export interface EvidenceInput {
   changesSummary: string
   verification: Array<{ label: string; output: string; passed: boolean }>
   selfCheck: Array<{ acceptanceId: string; verdict: 'pass' | 'partial' | 'fail'; note: string }>
   diffSummary?: string
+  artifacts?: Artifact[]
 }
 
 export interface EvidenceRejection {
@@ -80,6 +82,7 @@ export function parseEvidenceInput(raw: unknown): EvidenceInput {
   if (raw.diffSummary !== undefined && typeof raw.diffSummary !== 'string') {
     problems.push('diffSummary must be a string.')
   }
+  parseArtifacts(raw.artifacts, problems)
   if (problems.length > 0) throw new EvidenceRejectedError(problems)
   const input = raw as unknown as EvidenceInput
   return {
@@ -87,7 +90,47 @@ export function parseEvidenceInput(raw: unknown): EvidenceInput {
     verification: input.verification.map(v => ({ label: v.label, output: v.output, passed: v.passed })),
     selfCheck: input.selfCheck.map(s => ({ acceptanceId: s.acceptanceId, verdict: s.verdict, note: s.note })),
     ...(input.diffSummary === undefined ? {} : { diffSummary: input.diffSummary }),
+    ...(normalizeArtifacts(input.artifacts) === undefined ? {} : { artifacts: normalizeArtifacts(input.artifacts) }),
   }
+}
+
+/** artifacts 形状校验（§4.5b：可选；path 必填且须为绝对路径）。 */
+function parseArtifacts(value: unknown, problems: string[]): void {
+  if (value === undefined) return
+  if (!Array.isArray(value)) {
+    problems.push('artifacts must be an array（交付物清单）.')
+    return
+  }
+  if (value.length > MAX_EVIDENCE_ARTIFACTS) {
+    problems.push(`artifacts must have at most ${MAX_EVIDENCE_ARTIFACTS} items.`)
+  }
+  value.forEach((item, i) => {
+    if (!isObject(item) || typeof item.path !== 'string' || item.path.trim().length === 0) {
+      problems.push(`artifacts[${i}].path must be a non-empty string.`)
+      return
+    }
+    const p = item.path.trim()
+    if (p.length > 4096) problems.push(`artifacts[${i}].path exceeds 4096 characters.`)
+    if (!p.startsWith('/') && !/^[A-Za-z]:[\\/]/.test(p)) {
+      problems.push(`artifacts[${i}].path must be an absolute path（绝对路径）.`)
+    }
+    if (isObject(item) && item.description !== undefined && typeof item.description !== 'string') {
+      problems.push(`artifacts[${i}].description must be a string.`)
+    }
+    if (isObject(item) && item.howVerified !== undefined && typeof item.howVerified !== 'string') {
+      problems.push(`artifacts[${i}].howVerified must be a string.`)
+    }
+  })
+}
+
+/** artifacts 规范化：空数组 → undefined；path 去 blank；说明/核验说明截断。 */
+function normalizeArtifacts(value: Artifact[] | undefined): Artifact[] | undefined {
+  if (value === undefined || value.length === 0) return undefined
+  return value.map(item => ({
+    path: item.path.trim().slice(0, 4096),
+    ...(item.description === undefined ? {} : { description: item.description.slice(0, 500) }),
+    ...(item.howVerified === undefined ? {} : { howVerified: item.howVerified.slice(0, 1000) }),
+  }))
 }
 
 /**
@@ -102,6 +145,7 @@ export function normalizeEvidence(
   verification: Array<{ label: string; output: string; passed: boolean }>
   selfCheck: Array<{ acceptanceId: string; verdict: 'pass' | 'partial' | 'fail'; note: string }>
   diffSummary?: string
+  artifacts?: Artifact[]
 } {
   const problems: string[] = []
   const expected = new Set(acceptanceIds)
@@ -133,6 +177,7 @@ export function normalizeEvidence(
     verification: input.verification.map(v => ({ label: v.label.slice(0, 200), output: truncate(v.output), passed: v.passed })),
     selfCheck: input.selfCheck.map(s => ({ acceptanceId: s.acceptanceId, verdict: s.verdict, note: s.note.slice(0, 2000) })),
     ...(input.diffSummary === undefined ? {} : { diffSummary: input.diffSummary.slice(0, 2000) }),
+    ...(normalizeArtifacts(input.artifacts) === undefined ? {} : { artifacts: normalizeArtifacts(input.artifacts) }),
   }
 }
 

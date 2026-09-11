@@ -112,6 +112,7 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       const body = await readBody(req)
       const result = await handleTaskflowRequest(engine, req.method ?? 'GET', url.pathname, body, {
         models: buildModelCatalogFrom(ctx),
+        query: url.searchParams,
       })
       res.writeHead(result.status, result.headers)
       res.end(result.body)

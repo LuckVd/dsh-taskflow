@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSseStream, handleTaskflowRequest, isTrustedRequest } from '../../src/host/http.ts'
+import { ArtifactPreviewError } from '../../src/host/artifacts.ts'
 import type { TaskflowEngine } from '../../src/host/engine.ts'
 
 function fakeEngine(): { engine: TaskflowEngine; dispatchCalls: unknown[] } {
@@ -163,5 +164,46 @@ describe('SSE 流（NFR-04）', () => {
     // dispose 后订阅已注销（真实 store 不再回调；此处以注册表清空为证）
     expect(listeners).toHaveLength(0)
     expect(chunks).toHaveLength(3)
+  })
+})
+
+describe('交付物只读预览端点（§4.5b/§7.4b）', () => {
+  function previewEngine(preview: unknown): TaskflowEngine {
+    return {
+      readArtifactPreview: async (taskId: string, path: string) => {
+        if (typeof preview === 'function') return (preview as (t: string, p: string) => unknown)(taskId, path)
+        return preview
+      },
+    } as unknown as TaskflowEngine
+  }
+
+  it('happy path：返回 {ok:true, preview}', async () => {
+    const engine = previewEngine({ path: '/root/r.md', size: 24_094, truncated: false, binary: false, content: '# 报告' })
+    const query = new URLSearchParams({ taskId: 'tf_1', path: '/root/r.md' })
+    const result = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/artifact/preview', undefined, { query })
+    expect(result.status).toBe(200)
+    const body = JSON.parse(result.body) as { ok: boolean; preview: { path: string; content: string } }
+    expect(body.ok).toBe(true)
+    expect(body.preview.content).toBe('# 报告')
+  })
+
+  it('缺 taskId/path → 400；not-declared/not-found → 404；not-a-file → 400；io → 500', async () => {
+    const missing = await handleTaskflowRequest(previewEngine(null), 'GET', '/api/taskflow/artifact/preview', undefined)
+    expect(missing.status).toBe(400)
+
+    const declared = (code: 'invalid-path' | 'not-declared' | 'not-found' | 'not-a-file' | 'io') =>
+      previewEngine((_t: string, _p: string) => {
+        throw new ArtifactPreviewError(code, 'boom')
+      })
+    const q = (path: string) => ({ query: new URLSearchParams({ taskId: 'tf_1', path }) })
+    expect((await handleTaskflowRequest(declared('not-declared'), 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(404)
+    expect((await handleTaskflowRequest(declared('not-found'), 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(404)
+    expect((await handleTaskflowRequest(declared('not-a-file'), 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(400)
+    expect((await handleTaskflowRequest(declared('io'), 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(500)
+
+    const generic = previewEngine(() => {
+      throw new Error('nope')
+    })
+    expect((await handleTaskflowRequest(generic, 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(500)
   })
 })

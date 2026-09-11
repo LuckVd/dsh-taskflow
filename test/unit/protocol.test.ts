@@ -210,3 +210,48 @@ describe('decideApproval 与 pins.executionMode 校验（§7.1b）', () => {
     expect(() => validateActionShape({ type: 'createTask', requestId: 'r3', title: 't', description: 'd', pins: { executionMode: 'sudo' } })).toThrow(/executionMode/)
   })
 })
+
+describe('交付物声明校验（§4.5b：Evidence.artifacts）', () => {
+  const acceptanceIds = ['ac_1']
+  const base = {
+    changesSummary: '产出报告',
+    verification: [{ label: 'l', output: 'o', passed: true }],
+    selfCheck: [{ acceptanceId: 'ac_1', verdict: 'pass' as const, note: '' }],
+  }
+
+  it('合法 artifacts 规范化保留（path trim + 字段截断）', () => {
+    const parsed = parseEvidenceInput({
+      ...base,
+      artifacts: [{ path: ' /root/报告.md ', description: 'x'.repeat(600), howVerified: 'ls -l' }],
+    })
+    const normalized = normalizeEvidence(parsed, acceptanceIds)
+    expect(normalized.artifacts).toEqual([{ path: '/root/报告.md', description: 'x'.repeat(500), howVerified: 'ls -l' }])
+  })
+
+  it('省略或空数组 artifacts → 规范化后为 undefined（旧证据形态不变）', () => {
+    const without = normalizeEvidence(parseEvidenceInput(base), acceptanceIds)
+    expect('artifacts' in without).toBe(false)
+    const empty = normalizeEvidence(parseEvidenceInput({ ...base, artifacts: [] }), acceptanceIds)
+    expect('artifacts' in empty).toBe(false)
+  })
+
+  it('非数组 / 缺 path / 空 path / 相对路径拒收', () => {
+    expect(() => parseEvidenceInput({ ...base, artifacts: 'nope' })).toThrow(/artifacts/)
+    expect(() => parseEvidenceInput({ ...base, artifacts: [{ description: 'no path' } as never] })).toThrow(/path/)
+    expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: '   ' }] })).toThrow(/path/)
+    expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: 'relative/report.md' }] })).toThrow(/绝对路径/)
+  })
+
+  it('超过 10 条拒收；description/howVerified 非字符串拒收', () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ path: `/root/f${i}.md` }))
+    expect(() => parseEvidenceInput({ ...base, artifacts: many })).toThrow(/at most 10/)
+    expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: '/root/a.md', description: 3 as never }] })).toThrow(/description/)
+    expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: '/root/a.md', howVerified: true as never }] })).toThrow(/howVerified/)
+  })
+
+  it('终检/子任务证据之外的旧 ledger 无 artifacts 字段照常工作（加性变更）', () => {
+    const evidence = normalizeEvidence(parseEvidenceInput(base), acceptanceIds)
+    expect(Object.keys(evidence)).toEqual(expect.not.arrayContaining(['artifacts']))
+    expect(evidence.changesSummary).toBe('产出报告')
+  })
+})

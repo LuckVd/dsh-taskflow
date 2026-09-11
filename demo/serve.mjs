@@ -9,7 +9,7 @@
  */
 
 import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -27,9 +27,44 @@ const { validateModelSettings } = await import(dist('host/settings.js'))
 
 const dataFile = path.join(root, 'demo-data', 'ledger.json')
 
+// —— 样例交付物：mock 终检把它声明为 artifacts，验收台可体验「交付物预览」（§4.5b）——
+const demoArtifactPath = path.join(root, 'demo-data', '交付物预览样例.md')
+await mkdir(path.dirname(demoArtifactPath), { recursive: true })
+await writeFile(demoArtifactPath, [
+  '# 本周阅读清单（demo 样例交付物）',
+  '',
+  '> 这是 mock 终检声明的交付物本体——验收台的「交付物」区直接预览它，',
+  '> 不用离开看板去找文件。真实任务里，这里就是 AI 落盘的报告/文档。',
+  '',
+  '## 一、必读',
+  '',
+  '| 文章 | 一句话摘要 | 优先级 |',
+  '|---|---|---|',
+  '| 《The Design of Design》 | 需求先于形式：先想清楚「为什么」，再谈「怎么做」 | 高 |',
+  '| 《Thinking in Systems》 | 看见存量与流量，别只盯着事件 | 高 |',
+  '',
+  '## 二、可清理项建议（demo）',
+  '',
+  '- **A 档（安全可清）**：包管理器缓存、临时编译产物',
+  '- **B 档（需确认）**：旧版本容器镜像',
+  '- **C 档（不建议动）**：数据库主文件与热备',
+  '',
+  '## 三、结论',
+  '',
+  '1. 全程只读盘点，未执行任何清理动作；',
+  '2. 数字均可回溯到采集命令（见验证记录）；',
+  '3. 建议下一步对 B 档逐项确认。',
+  '',
+].join('\n'), 'utf8')
+
 // —— demo 场景脚本：第 1 个子任务首轮自检有瑕疵（可体验打回），其余全过 ——
 const adapter = new MockSessionAdapter({
   getLedger: () => engine.getState().ledger,
+  finalizeArtifacts: [{
+    path: demoArtifactPath,
+    description: '（demo）整理周报 markdown——终检声明的交付物本体',
+    howVerified: '（demo）文件存在 + 章节完整性检查',
+  }],
 })
 adapter.executionBehavior = async (input, call) => {
   const ledger = engine.getState().ledger
@@ -176,7 +211,9 @@ const server = createServer(async (req, res) => {
       const chunks = []
       for await (const chunk of req) chunks.push(chunk)
       const body = req.method === 'POST' ? Buffer.concat(chunks).toString('utf8') : undefined
-      const result = await handleTaskflowRequest(engine, req.method ?? 'GET', url.pathname, body)
+      const result = await handleTaskflowRequest(engine, req.method ?? 'GET', url.pathname, body, {
+        query: url.searchParams,
+      })
       res.writeHead(result.status, result.headers)
       res.end(result.body)
       return

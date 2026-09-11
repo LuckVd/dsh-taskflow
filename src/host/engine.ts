@@ -17,7 +17,9 @@ import { DecomposeValidationError, validateDecomposeOutput } from '../protocol/d
 import type { DecomposeOutput } from '../protocol/decompose.ts'
 import { EvidenceRejectedError, normalizeEvidence, parseEvidenceInput, renderEvidenceCorrection } from '../protocol/evidence.ts'
 import type { ApprovalRecord, DispatchResult, EngineState, Evidence, ExecutionMode, Ledger, ModelSettings, Pins, SessionModelSelection, Subtask, Task } from '../protocol/types.ts'
+import type { ArtifactPreview } from '../protocol/types.ts'
 import { resolveExecutionMode } from '../protocol/types.ts'
+import { ArtifactPreviewError, readArtifactPreview } from './artifacts.ts'
 import { LedgerStore, LedgerWriteError } from './ledger.ts'
 import { modelLabel } from './settings.ts'
 import { renderDecomposePrompt, renderExecutionPrompt, renderFinalCheckPrompt, renderTriagePrompt } from './prompts.ts'
@@ -219,6 +221,16 @@ export class TaskflowEngine {
       decompose: next.decompose === null ? null : { ...next.decompose },
       execution: next.execution === null ? null : { ...next.execution },
     }
+  }
+
+  /**
+   * 交付物只读预览（§4.5b）：只放行该任务证据里声明过的 artifacts 路径。
+   * 失败以 ArtifactPreviewError 抛出（HTTP 层映射状态码）。
+   */
+  async readArtifactPreview(taskId: string, requestedPath: string): Promise<ArtifactPreview> {
+    const task = this.findTask(taskId)
+    if (task === null) throw new ArtifactPreviewError('not-found', `task ${taskId} not found`)
+    return readArtifactPreview(task, requestedPath)
   }
 
   /** 加载 + 确定性恢复（NFR-03：运行中的可观察接管，未启动的取消不重发）。 */
@@ -997,6 +1009,7 @@ export class TaskflowEngine {
       changesSummary: normalized.changesSummary,
       verification: normalized.verification,
       selfCheck: normalized.selfCheck,
+      ...(normalized.artifacts === undefined ? {} : { artifacts: normalized.artifacts }),
       refs: { sessionId, ...(normalized.diffSummary === undefined ? {} : { diffSummary: normalized.diffSummary }) },
     }
     await this.store.mutate(ledger => {
@@ -1011,10 +1024,11 @@ export class TaskflowEngine {
       task.evidence = evidence
       task.finalizeSessionId = undefined
       const passed = evidence.selfCheck.filter(c => c.verdict === 'pass').length
+      const artifactNote = evidence.artifacts === undefined ? '' : `，交付物 ${evidence.artifacts.length} 项`
       appendTaskNote(task, {
         actor: 'ai',
         kind: 'task-evidence-submitted',
-        reason: `任务级终检：自检 ${passed}/${evidence.selfCheck.length} 通过`,
+        reason: `任务级终检：自检 ${passed}/${evidence.selfCheck.length} 通过${artifactNote}`,
         refs: { sessionId },
       })
       if (task.status === 'in-progress') {
@@ -1515,6 +1529,7 @@ export class TaskflowEngine {
           changesSummary: normalized.changesSummary,
           verification: normalized.verification,
           selfCheck: normalized.selfCheck,
+          ...(normalized.artifacts === undefined ? {} : { artifacts: normalized.artifacts }),
           refs: { sessionId, ...(normalized.diffSummary === undefined ? {} : { diffSummary: normalized.diffSummary }) },
         }
         sub.evidence = evidence
@@ -1531,7 +1546,7 @@ export class TaskflowEngine {
         appendSubtaskNote(sub, {
           actor: 'ai',
           kind: 'evidence-submitted',
-          reason: `证据提交：自检 ${evidence.selfCheck.filter(c => c.verdict === 'pass').length}/${evidence.selfCheck.length} 通过`,
+          reason: `证据提交：自检 ${evidence.selfCheck.filter(c => c.verdict === 'pass').length}/${evidence.selfCheck.length} 通过${evidence.artifacts === undefined ? '' : `，交付物 ${evidence.artifacts.length} 项`}`,
           refs: { sessionId },
         })
         transitionSubtask(sub, 'review', { actor: 'ai', reason: '证据三要素齐全，进入待验收（S3）', refs: { sessionId } })

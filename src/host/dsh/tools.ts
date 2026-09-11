@@ -58,9 +58,10 @@ export function registerTaskflowTools(agentCtx: Context, tools: AgentToolSurface
     disposers.push(unwrapDisposer(register({
       name: 'taskflow_submit_evidence',
       description:
-        '提交子任务完成证明。证据三要素缺一不可：changesSummary（本轮做了什么、改了哪里）、'
+         '提交子任务完成证明。证据三要素缺一不可：changesSummary（本轮做了什么、改了哪里）、'
         + 'verification（≥1 条验证记录：label/output/passed，运行真实命令并粘贴输出）、'
         + 'selfCheck（与验收标准逐条等长对应：acceptanceId/verdict/note）。'
+        + '产出了文件/目录形态的交付物时，必须用 artifacts 逐项声明（绝对路径 + 说明 + 核验方式）。'
         + '校验失败会返回修正提示，修正后可重复调用。子任务完成前必须成功调用本工具。',
       parameters: {
         type: 'object',
@@ -95,6 +96,22 @@ export function registerTaskflowTools(agentCtx: Context, tools: AgentToolSurface
             },
           },
           diffSummary: { type: 'string', description: '可选：diff 统计（+n −m 与涉及文件列表）。' },
+          artifacts: {
+            type: 'array',
+            description:
+              '可选：本子任务产出的交付物清单（文件/目录）。产出了文件形态的产物时必须逐项声明：'
+            + 'path 用绝对路径；description 一句话说明产物是什么；howVerified 说明存在性如何被核验。',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                path: { type: 'string', description: '产物绝对路径。' },
+                description: { type: 'string', description: '产物说明（一句话）。' },
+                howVerified: { type: 'string', description: '存在性/完整性如何被核验。' },
+              },
+              required: ['path'],
+            },
+          },
         },
         required: ['changesSummary', 'verification', 'selfCheck'],
       },
@@ -105,6 +122,7 @@ export function registerTaskflowTools(agentCtx: Context, tools: AgentToolSurface
           verification: Array<{ label: string; output: string; passed: boolean }>
           selfCheck: Array<{ acceptanceId: string; verdict: 'pass' | 'partial' | 'fail'; note: string }>
           diffSummary?: string
+          artifacts?: Array<{ path: string; description?: string; howVerified?: string }>
         }
         return tools.submitEvidence(args)
       },

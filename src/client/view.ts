@@ -282,4 +282,23 @@ export function modelForSession(sub: Subtask, sessionId: string): string | undef
   return event?.refs?.model
 }
 
+/** 字节数的人类可读形态（交付物预览的 size 展示用）。 */
+export function formatBytes(size: number): string {
+  if (!Number.isFinite(size) || size < 0) return '?'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** 交付物路径的短形态：保留文件名与父目录名，中间省略（窄面板可读）。 */
+export function shortArtifactPath(path: string, max = 46): string {
+  if (path.length <= max) return path
+  const segments = path.split('/').filter(s => s.length > 0)
+  const fileName = segments[segments.length - 1] ?? path
+  const parent = segments[segments.length - 2]
+  const head = parent === undefined ? fileName : `${parent}/${fileName}`
+  if (head.length <= max) return `…/${head}`
+  return `…/${fileName.slice(-(max - 2))}`
+}
+
 export type { Ledger }

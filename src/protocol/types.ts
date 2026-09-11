@@ -155,6 +155,12 @@ export interface Evidence {
   verification: VerificationRecord[]
   /** 逐条对照验收标准（与 acceptance 等长）。 */
   selfCheck: SelfCheckItem[]
+  /**
+   * 交付物清单（可选，§4.5b）：本份证据结构化指认的产物本体（文件/目录）。
+   * 任务级终检证据带上它，验收台才能「先看产物再看判定」；预览路由只放行
+   * 此处声明过的路径（ledger 白名单，§7.4b）。undefined = 未声明。
+   */
+  artifacts?: Artifact[]
   refs: {
     /** 产出会话。 */
     sessionId: string
@@ -169,6 +175,16 @@ export interface VerificationRecord {
   /** 命令输出摘录（截断至 8KiB）。 */
   output: string
   passed: boolean
+}
+
+/** 单条交付物声明（§4.5b，2026-09-11）：证据里结构化指认「产物本体」。 */
+export interface Artifact {
+  /** 产物绝对路径（文件或目录）。 */
+  path: string
+  /** 产物说明（如「本机整理报告 Markdown，六章节 + 两附录」）。 */
+  description?: string
+  /** 存在性/完整性如何被核验（如「ls -l + 章节完整性 grep」）。 */
+  howVerified?: string
 }
 
 export interface SelfCheckItem {
@@ -268,6 +284,22 @@ export interface ModelCatalog {
   groups: ModelCatalogGroup[]
 }
 
+// —— 交付物预览（GET /api/taskflow/artifact/preview 载荷；§4.5b/§7.4b）——
+
+/** 交付物只读预览结果：文本头部 + 截断/二进制标记。 */
+export interface ArtifactPreview {
+  /** 与声明一致的产物路径。 */
+  path: string
+  /** 磁盘上的完整字节数。 */
+  size: number
+  /** 超出预览上限被截断（content 只含头部）。 */
+  truncated: boolean
+  /** 二进制文件（含 NUL 字节嗅探命中）：content 为空，不做文本预览。 */
+  binary: boolean
+  /** 文本内容（UTF-8；上限内头部，截断时注明）。 */
+  content: string
+}
+
 // —— 状态枚举 ——
 
 export type TaskStatus =
@@ -305,6 +337,10 @@ export const BOARD_COLUMNS: ReadonlyArray<{
 export const MAX_EVENTS_PER_TASK = 500
 /** 每条验证输出截断上限（§7.4）。 */
 export const MAX_VERIFICATION_OUTPUT_BYTES = 8 * 1024
+/** 单份证据交付物声明条数上限（§4.5b，防塞爆验收台）。 */
+export const MAX_EVIDENCE_ARTIFACTS = 10
+/** 交付物预览读取字节上限（§7.4b）：超出截断，首屏不整读大文件。 */
+export const MAX_ARTIFACT_PREVIEW_BYTES = 256 * 1024
 /** 单条 action 体积上限（§6）。 */
 export const MAX_ACTION_BYTES = 64 * 1024;
 

@@ -8,6 +8,7 @@
  * - GET  /api/taskflow/settings  全局模型设置（两槽，§PLAN-MODEL）
  * - PUT  /api/taskflow/settings  覆盖全局模型设置（fail-closed 形状校验）
  * - GET  /api/taskflow/models    宿主模型目录投影（下拉数据源；未注入提供方 → 501）
+ * - GET  /api/taskflow/artifact/preview?taskId=&path=  交付物只读预览（仅限证据声明过的路径，§7.4b）
  *
  * @module dsh-taskflow/host
  */
@@ -15,6 +16,7 @@
 import type { IncomingHttpHeaders } from 'node:http'
 import { MAX_ACTION_BYTES } from '../protocol/types.ts'
 import type { ModelCatalog, ModelSettings } from '../protocol/types.ts'
+import { isArtifactPreviewError } from './artifacts.ts'
 import type { TaskflowEngine } from './engine.ts'
 import { ModelSettingsError, validateModelSettings } from './settings.ts'
 
@@ -64,13 +66,14 @@ export function isTrustedRequest(
 
 /** 处理一次（非 SSE）请求；SSE 由 plugin 层用 {@link createSseStream} 绑定。
  *  `models`：宿主模型目录投影的提供方（dsh 适配器注入 ctx.llm 投影；demo 注入静态目录）。
- *  未提供时 GET models 返回 501（客户端展示「目录不可用」，两槽仍可保存）。 */
+ *  未提供时 GET models 返回 501（客户端展示「目录不可用」，两槽仍可保存）。
+ *  `query`：URL 查询参数（artifact/preview 用 taskId/path 定位）。 */
 export async function handleTaskflowRequest(
   engine: TaskflowEngine,
   method: string,
   pathname: string,
   body: string | undefined,
-  opts: { models?: () => Promise<ModelCatalog> } = {},
+  opts: { models?: () => Promise<ModelCatalog>; query?: URLSearchParams } = {},
 ): Promise<HttpResult> {
   if (method === 'GET' && pathname === '/api/taskflow/state') {
     const state = engine.getState()
@@ -119,6 +122,25 @@ export async function handleTaskflowRequest(
       return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(catalog) }
     } catch (error) {
       return jsonError(502, `model catalog load failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (method === 'GET' && pathname === '/api/taskflow/artifact/preview') {
+    const taskId = opts.query?.get('taskId') ?? ''
+    const path = opts.query?.get('path') ?? ''
+    if (taskId.length === 0 || path.length === 0) {
+      return jsonError(400, 'taskId and path query parameters are required.')
+    }
+    try {
+      const preview = await engine.readArtifactPreview(taskId, path)
+      return { status: 200, headers: JSON_HEADERS, body: JSON.stringify({ ok: true, preview }) }
+    } catch (error) {
+      if (isArtifactPreviewError(error)) {
+        const status = error.code === 'invalid-path' || error.code === 'not-a-file'
+          ? 400
+          : error.code === 'io' ? 500 : 404
+        return jsonError(status, error.message)
+      }
+      return jsonError(500, `artifact preview failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   return jsonError(404, `no taskflow route for ${method} ${pathname}`)

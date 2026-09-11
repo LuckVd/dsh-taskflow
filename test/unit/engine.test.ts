@@ -1103,3 +1103,120 @@ describe('任务级终检与打回定位（2026-09-11 语义）', () => {
     }
   })
 })
+
+describe('交付物一等公民（§4.5b：artifacts 声明 + 只读预览）', () => {
+  it('终检产出 artifacts → 落库 task.evidence.artifacts；事件留痕交付物数', async () => {
+    const dir = await tempDir()
+    try {
+      const reportPath = path.join(dir, '整理报告.md')
+      await writeFile(reportPath, '# 报告\n\n正文', 'utf8')
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      // 创建任务前就布置终检行为：acceptance id 运行时动态查（终检只在全部子任务举证后触发，无竞态）
+      adapter.finalizeBehavior = async input => {
+        const task = engine.getState().ledger.tasks.find(t => t.id === input.taskId)
+        const acceptance = task?.contract.acceptance ?? []
+        return {
+          kind: 'ok',
+          output: {
+            changesSummary: '整体交付完成，报告已落盘',
+            verification: [{ label: 'ls -l 报告', output: 'exists', passed: true }],
+            selfCheck: acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '逐条核验通过' })),
+            artifacts: [{ path: reportPath, description: '整理报告 Markdown', howVerified: 'ls -l + 章节完整性' }],
+          },
+        }
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      const task = taskOf(engine, taskId)
+      expect(task.evidence!.artifacts).toEqual([
+        { path: reportPath, description: '整理报告 Markdown', howVerified: 'ls -l + 章节完整性' },
+      ])
+      expect(task.events.some(e => (e.reason ?? '').includes('交付物 1 项'))).toBe(true)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('子任务证据可带 artifacts；readArtifactPreview 只放行声明过的路径', async () => {
+    const dir = await tempDir()
+    try {
+      const declared = path.join(dir, 'declared.txt')
+      const secret = path.join(dir, 'secret.txt')
+      await writeFile(declared, '# 只有声明过的文件可读', 'utf8')
+      await writeFile(secret, 'not allowed', 'utf8')
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      adapter.executionBehavior = async input => {
+        const ledger = engine.getState().ledger
+        const sub = ledger.tasks.flatMap(t => t.subtasks).find(s => s.id === input.subtaskId)
+        if (sub === undefined) throw new Error('subtask missing')
+        const result = await input.tools.submitEvidence({
+          changesSummary: `（测试）完成 ${sub.title}`,
+          verification: [{ label: 'check', output: 'ok', passed: true }],
+          selfCheck: sub.acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '' })),
+          ...(sub.id.endsWith('_s1') ? { artifacts: [{ path: declared, description: '声明产物' }] } : {}),
+        })
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => taskOf(engine, taskId).subtasks.every(s => s.evidence !== undefined))
+      const s1 = taskOf(engine, taskId).subtasks[0]!
+      expect(s1.evidence!.artifacts).toEqual([{ path: declared, description: '声明产物' }])
+
+      // 声明过的路径可预览；未声明的同目录文件被拒绝（白名单语义）
+      const ok = await engine.readArtifactPreview(taskId, declared)
+      expect(ok.binary).toBe(false)
+      expect(ok.content).toContain('只有声明过的文件可读')
+      expect(ok.truncated).toBe(false)
+      await expect(engine.readArtifactPreview(taskId, secret)).rejects.toMatchObject({ code: 'not-declared' })
+      await expect(engine.readArtifactPreview(taskId, 'relative.txt')).rejects.toMatchObject({ code: 'invalid-path' })
+      await expect(engine.readArtifactPreview('tf_missing', declared)).rejects.toMatchObject({ code: 'not-found' })
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('预览守卫：>256KiB 截断、二进制拒显、目录拒显、文件缺失可辨', async () => {
+    const dir = await tempDir()
+    try {
+      const bigPath = path.join(dir, 'big.txt')
+      const binPath = path.join(dir, 'blob.bin')
+      const dirPath = path.join(dir, 'adir')
+      const gonePath = path.join(dir, 'gone.txt')
+      const { writeFile: wf, mkdir: md } = await import('node:fs/promises')
+      await wf(bigPath, 'x'.repeat(300 * 1024), 'utf8')
+      await wf(binPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00]))
+      await md(dirPath, { recursive: true })
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      adapter.executionBehavior = async input => {
+        const ledger = engine.getState().ledger
+        const sub = ledger.tasks.flatMap(t => t.subtasks).find(s => s.id === input.subtaskId)
+        if (sub === undefined) throw new Error('subtask missing')
+        const result = await input.tools.submitEvidence({
+          changesSummary: `（测试）完成 ${sub.title}`,
+          verification: [{ label: 'check', output: 'ok', passed: true }],
+          selfCheck: sub.acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '' })),
+          artifacts: [bigPath, binPath, dirPath, gonePath].map(p => ({ path: p })),
+        })
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => taskOf(engine, taskId).subtasks.every(s => s.evidence !== undefined))
+
+      const big = await engine.readArtifactPreview(taskId, bigPath)
+      expect(big.truncated).toBe(true)
+      expect(big.content.length).toBeLessThanOrEqual(256 * 1024)
+
+      const bin = await engine.readArtifactPreview(taskId, binPath)
+      expect(bin.binary).toBe(true)
+      expect(bin.content).toBe('')
+
+      await expect(engine.readArtifactPreview(taskId, dirPath)).rejects.toMatchObject({ code: 'not-a-file' })
+      await expect(engine.readArtifactPreview(taskId, gonePath)).rejects.toMatchObject({ code: 'not-found' })
+    } finally {
+      await cleanup(dir)
+    }
+  })
+})

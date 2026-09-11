@@ -3,6 +3,7 @@
  * 验证：挂载、看板四列、卡片、抽屉五区、验收页证据、打回流、三态 aria。
  */
 import { readFileSync, existsSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { JSDOM, VirtualConsole } from 'jsdom'
@@ -96,6 +97,8 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
         if (response.status >= 400) throw new Error(`settings ${response.status}`)
         return response.json
       },
+      getArtifactPreview: async (taskId: string, artifactPath: string) =>
+        engine.readArtifactPreview(taskId, artifactPath),
       getModels: async () => ({
         default: { provider: 'deepseek', model: 'deepseek-chat' },
         groups: [
@@ -297,5 +300,64 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     // Esc 关闭浮层
     doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await waitFor(() => doc.querySelector('.tf-popover') === null)
+  })
+
+  it('交付物进验收台（§4.5b）：终检 artifacts 声明 → 预览直接读产物本体', async () => {
+    const doc = dom.window.document
+    // 关闭上一用例遗留的弹窗，回到看板
+    const closeDrawer2 = [...doc.querySelectorAll('.tf-modal-head button')].at(-1) as HTMLElement | undefined
+    closeDrawer2?.click()
+    await waitFor(() => doc.querySelector('.tf-modal') === null)
+
+    // 布置终检行为：声明一个真实存在的交付物文件；执行行为重置为普通通过流
+    // （上一用例遗留的 executionBehavior 会对新任务再次发起提权审批并挂起执行）
+    const reportPath = path.join(dir, '交付报告.md')
+    await writeFile(reportPath, '# 整理报告\n\n## 一、概览\n\n磁盘 40G 已用 80%。', 'utf8')
+    adapter.executionBehavior = async input => {
+      const result = await input.tools.submitEvidence(buildPassingEvidence(engine.getState().ledger, input.subtaskId))
+      if (!result.accepted) throw new Error(result.correction)
+    }
+    adapter.finalizeBehavior = async input => {
+      const task = engine.getState().ledger.tasks.find(t => t.id === input.taskId)
+      const acceptance = task?.contract.acceptance ?? []
+      return {
+        kind: 'ok' as const,
+        output: {
+          changesSummary: '（测试）整体交付完成，报告已落盘',
+          verification: [{ label: 'ls -l', output: 'exists', passed: true }],
+          selfCheck: acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '通过' })),
+          artifacts: [{ path: reportPath, description: '整理报告 Markdown', howVerified: 'ls -l' }],
+        },
+      }
+    }
+    const deliverable = await engine.dispatch({
+      type: 'createTask',
+      requestId: 'ui-deliverable',
+      title: '产出交付物演示任务',
+      description: '生成一份 markdown 报告。',
+    })
+    expect(deliverable.ok).toBe(true)
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === deliverable.taskId)?.status === 'review')
+
+    // 打开该任务弹窗 → 验收 tab
+    const card = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('产出交付物演示任务'))
+    ;(card as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-modal') !== null)
+    const reviewTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent === '验收 ●' || el.textContent === '验收')
+    ;(reviewTab as HTMLElement).click()
+    // 交付物区出现（先于判定面的产物本体）
+    await waitFor(() => doc.querySelector('[data-testid="deliverables"]') !== null)
+    const section = doc.querySelector('[data-testid="deliverables"]')!
+    expect(section.textContent).toContain('交付物（1）')
+    expect(section.textContent).toContain('整理报告 Markdown')
+    // 点「预览」→ 只读预览渲染出 markdown 标题与正文
+    const previewBtn = [...section.querySelectorAll('button')].find(b => b.textContent === '预览')
+    expect(previewBtn).toBeTruthy()
+    ;(previewBtn as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-md') !== null)
+    const mdText = doc.querySelector('.tf-artifact-preview')!.textContent ?? ''
+    expect(mdText).toContain('整理报告')
+    expect(mdText).toContain('磁盘 40G 已用 80%')
+    expect(doc.querySelector('.tf-md-h1') !== null).toBe(true)
   })
 })

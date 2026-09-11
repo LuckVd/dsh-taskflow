@@ -4,7 +4,7 @@
  * @module dsh-taskflow/client
  */
 
-import type { DispatchResult, EngineState, ModelCatalog, ModelSettings } from '../protocol/types.ts'
+import type { ArtifactPreview, DispatchResult, EngineState, ModelCatalog, ModelSettings } from '../protocol/types.ts'
 import type { TaskflowAction } from '../protocol/actions.ts'
 
 export interface TaskflowTransport {
@@ -21,6 +21,8 @@ export interface TaskflowTransport {
   saveSettings(next: ModelSettings): Promise<ModelSettings>
   /** 宿主模型目录（下拉数据源）；部署未提供时抛错。 */
   getModels(): Promise<ModelCatalog>
+  /** 交付物只读预览（§4.5b）：仅限该任务证据声明过的 artifacts 路径。 */
+  getArtifactPreview(taskId: string, path: string): Promise<ArtifactPreview>
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -98,6 +100,13 @@ export function createHttpTransport(base = ''): TaskflowTransport {
     async getModels(): Promise<ModelCatalog> {
       return readJson(await fetch(`${base}/api/taskflow/models`, { headers: { accept: 'application/json' } }))
     },
+    async getArtifactPreview(taskId: string, path: string): Promise<ArtifactPreview> {
+      const query = new URLSearchParams({ taskId, path })
+      const payload = await readJson<{ ok: boolean; preview: ArtifactPreview }>(
+        await fetch(`${base}/api/taskflow/artifact/preview?${query.toString()}`, { headers: { accept: 'application/json' } }),
+      )
+      return payload.preview
+    },
   }
 }
 
@@ -108,6 +117,7 @@ export function createLocalTransport(engine: {
   subscribe(listener: () => void): () => void
   getModelSettings?(): ModelSettings
   setModelSettings?(next: ModelSettings): void
+  readArtifactPreview?(taskId: string, path: string): Promise<ArtifactPreview>
 }): TaskflowTransport {
   return {
     getState: () => Promise.resolve(engine.getState()),
@@ -120,5 +130,11 @@ export function createLocalTransport(engine: {
       return engine.getModelSettings?.() ?? next
     },
     getModels: async () => ({ default: null, groups: [] }),
+    getArtifactPreview: (taskId, path) => {
+      if (engine.readArtifactPreview === undefined) {
+        return Promise.reject(new Error('当前部署不支持交付物预览'))
+      }
+      return engine.readArtifactPreview(taskId, path)
+    },
   }
 }

@@ -10,6 +10,7 @@ import {
   actorLabel,
   boardGroups,
   filterTasks,
+  formatBytes,
   mergedTimeline,
   modelForSession,
   pendingApprovalCount,
@@ -17,13 +18,16 @@ import {
   progressRatio,
   relativeTime,
   reviewBadgeCount,
+  shortArtifactPath,
   statusLabel,
   subtaskStatusLabel,
 } from './view.ts'
 import type { CardSummary, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
-import type { DispatchResult, EngineState } from '../protocol/types.ts'
+import { parseMarkdown } from './markdown.ts'
+import { renderBlocks } from './MarkdownView.tsx'
+import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
 type TabId = 'contract' | 'subtasks' | 'review' | 'history' | 'decompose'
@@ -202,6 +206,7 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           onClose={() => { setSelectedId(null); setFocusApprovalId(null) }}
           dispatch={dispatch}
           onRefresh={refresh}
+          transport={transport}
         />
       )}
     </div>
@@ -445,12 +450,14 @@ function DetailModal({
   onClose,
   dispatch,
   onRefresh,
+  transport,
 }: {
   task: Task
   focusApprovalId: string | null
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
   onRefresh: () => Promise<void>
+  transport: TaskflowTransport
 }): JSX.Element {
   const [tab, setTab] = useState<TabId>(task.status === 'review' ? 'review' : 'contract')
   const [busy, setBusy] = useState(false)
@@ -509,7 +516,7 @@ function DetailModal({
           <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
           {tab === 'contract' && <ContractTab task={task} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
-          {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} />}
+          {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} />}
           {tab === 'history' && <HistoryTab task={task} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
         </div>
@@ -777,10 +784,12 @@ function ReviewTab({
   task,
   busy,
   act,
+  transport,
 }: {
   task: Task
   busy: boolean
   act: (action: Record<string, unknown>) => Promise<void>
+  transport: TaskflowTransport
 }): JSX.Element {
   const [comment, setComment] = useState('')
   const [procOpen, setProcOpen] = useState(false)
@@ -796,6 +805,11 @@ function ReviewTab({
   const taskCheckById = taskEvidence === undefined
     ? null
     : new Map(taskEvidence.selfCheck.map(check => [check.acceptanceId, check]))
+  // 交付物预览（§4.5b）：验收台直接看产物本体，不用离开看板去翻文件
+  const previewArtifact = useCallback(
+    (path: string) => transport.getArtifactPreview(task.id, path),
+    [transport, task.id],
+  )
 
   return (
     <div className="tf-review">
@@ -814,6 +828,7 @@ function ReviewTab({
               acceptance={acceptance}
               evidence={taskEvidence}
               headExtra={<span className="tf-chip tf-chip-mono">AI 终检</span>}
+              previewArtifact={previewArtifact}
             />
           ) : finalizing ? (
             <span className="tf-hint">AI 终检中：正在对照任务级验收标准核验整体交付；完成后进入人工终批——你不需要逐个看子任务。</span>
@@ -872,7 +887,7 @@ function ReviewTab({
                     )}
                   </button>
                   {openSubId === sub.id && (sub.evidence !== undefined
-                    ? <EvidenceDetail key={sub.id} sub={sub} />
+                    ? <EvidenceDetail key={sub.id} sub={sub} previewArtifact={previewArtifact} />
                     : <NoEvidencePanel sub={sub} />)}
                 </div>
               ))}
@@ -958,7 +973,7 @@ function NoEvidencePanel({ sub }: { sub: Subtask }): JSX.Element {
 }
 
 /**
- * 证据视图（分层：判定先行 → 自检前置 → 摘要限高 → 验证折叠）。
+ * 证据视图（分层：交付物先行 → 判定 → 自检前置 → 摘要限高 → 验证折叠）。
  * 任务级终检卡与子任务证据卡共用；key 挂在调用方：切换对象时折叠状态整体重置。
  */
 function EvidenceView({
@@ -968,6 +983,7 @@ function EvidenceView({
   round,
   status,
   headExtra,
+  previewArtifact,
 }: {
   title: string
   acceptance: AcceptanceItem[]
@@ -975,6 +991,8 @@ function EvidenceView({
   round?: number
   status?: Subtask['status'] | Task['status']
   headExtra?: JSX.Element
+  /** 交付物预览口（§4.5b）；缺省 = 只展示声明不提供预览。 */
+  previewArtifact?: (path: string) => Promise<ArtifactPreview>
 }): JSX.Element {
   const stats = checkStatsOf(acceptance, evidence)
   const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
@@ -984,6 +1002,8 @@ function EvidenceView({
   const summaryLong = evidence.changesSummary.length > 160
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [openVerify, setOpenVerify] = useState<Record<number, boolean>>({})
+  const [openArtifacts, setOpenArtifacts] = useState<Record<string, boolean>>({})
+  const hasArtifacts = (evidence.artifacts?.length ?? 0) > 0
 
   return (
     <article className="tf-ev">
@@ -994,6 +1014,24 @@ function EvidenceView({
         {stats.total > 0 && <CheckBadge passed={stats.passed} total={stats.total} />}
         {round !== undefined && round > 1 && <span className="tf-chip">第 {round} 轮证据</span>}
       </div>
+
+      {hasArtifacts && (
+        <section className="tf-ev-section tf-artifacts" data-testid="deliverables">
+          <div className="tf-ev-sechead">
+            <span className="tf-section-title">交付物（{evidence.artifacts?.length}）</span>
+            <span className="tf-hint">产物本体——最需要验收的东西，点「预览」直接查看</span>
+          </div>
+          {(evidence.artifacts ?? []).map((artifact, index) => (
+            <ArtifactRow
+              key={`${artifact.path}-${index}`}
+              artifact={artifact}
+              open={openArtifacts[artifact.path] ?? false}
+              preview={previewArtifact}
+              onToggle={() => setOpenArtifacts(map => ({ ...map, [artifact.path]: !(map[artifact.path] ?? false) }))}
+            />
+          ))}
+        </section>
+      )}
 
       <section className="tf-ev-section">
         <button type="button" className="tf-ev-sechead" aria-expanded={checksOpen} onClick={() => setChecksOpen(open => !open)}>
@@ -1063,7 +1101,7 @@ function EvidenceView({
 }
 
 /** 子任务证据卡 = EvidenceView + 会话/模型留痕。 */
-function EvidenceDetail({ sub }: { sub: Subtask }): JSX.Element {
+function EvidenceDetail({ sub, previewArtifact }: { sub: Subtask; previewArtifact?: (path: string) => Promise<ArtifactPreview> }): JSX.Element {
   const evidence = sub.evidence
   if (evidence === undefined) return <></>
   return (
@@ -1072,6 +1110,7 @@ function EvidenceDetail({ sub }: { sub: Subtask }): JSX.Element {
         title={sub.title}
         acceptance={sub.acceptance}
         evidence={evidence}
+        previewArtifact={previewArtifact}
         round={sub.round}
         status={sub.status}
       />
@@ -1165,4 +1204,83 @@ function StatusDot({ status }: { status: Task['status'] | Subtask['status'] }): 
     : status === 'in-progress' || status === 'decomposing' ? 'tf-dot-amber'
     : 'tf-dot-gray'
   return <span className={`tf-status-dot ${dot}`} aria-hidden="true" />
+}
+
+// —— 交付物（§4.5b，2026-09-11）：产物本体进验收台 ——
+// 预览内容为 AI 产出的文件文本，一律走 MarkdownView（React 转义，无 HTML 注入面）。
+
+type PreviewState =
+  | { phase: 'loading' }
+  | { phase: 'error'; message: string }
+  | { phase: 'done'; data: ArtifactPreview }
+
+/** 单条交付物：路径 + 说明 + 核验方式 + 复制路径，可展开只读预览。 */
+function ArtifactRow({
+  artifact,
+  open,
+  onToggle,
+  preview,
+}: {
+  artifact: Artifact
+  open: boolean
+  onToggle: () => void
+  preview?: (path: string) => Promise<ArtifactPreview>
+}): JSX.Element {
+  const [state, setState] = useState<PreviewState | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const toggle = (): void => {
+    onToggle()
+    if (open || preview === undefined) return // 即将从 open → closed，或无预览口
+    if (state !== null) return
+    setState({ phase: 'loading' })
+    preview(artifact.path)
+      .then(data => setState({ phase: 'done', data }))
+      .catch((error: unknown) => setState({ phase: 'error', message: error instanceof Error ? error.message : String(error) }))
+  }
+
+  const copy = (): void => {
+    void navigator.clipboard?.writeText(artifact.path)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div className="tf-artifact">
+      <div className="tf-artifact-row">
+        <span className="tf-artifact-icon" aria-hidden="true">📄</span>
+        <span className="tf-artifact-path" title={artifact.path}>{shortArtifactPath(artifact.path)}</span>
+        <button type="button" className="tf-link-btn" onClick={copy}>{copied ? '已复制' : '复制路径'}</button>
+        {preview !== undefined && (
+          <button type="button" className="tf-link-btn" aria-expanded={open} onClick={toggle}>
+            {open ? '收起预览' : '预览'}
+          </button>
+        )}
+      </div>
+      <div className="tf-artifact-meta">
+        {artifact.description !== undefined && <span className="tf-artifact-desc">{artifact.description}</span>}
+        {artifact.howVerified !== undefined && <span className="tf-artifact-verified">核验：{artifact.howVerified}</span>}
+      </div>
+      {open && (
+        <div className="tf-artifact-preview">
+          {state?.phase === 'loading' && <span className="tf-hint">加载预览…</span>}
+          {state?.phase === 'error' && <span className="tf-hint">预览失败：{state.message}</span>}
+          {state?.phase === 'done' && state.data.binary && (
+            <span className="tf-hint">二进制文件（{formatBytes(state.data.size)}），不支持文本预览。</span>
+          )}
+          {state?.phase === 'done' && !state.data.binary && (
+            <>
+              {(state.data.truncated || state.data.size > 0) && (
+                <div className="tf-artifact-previewbar">
+                  {formatBytes(state.data.size)}
+                  {state.data.truncated && ' · 仅预览前 256KB'}
+                </div>
+              )}
+              <div className="tf-md">{renderBlocks(parseMarkdown(state.data.content))}</div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
