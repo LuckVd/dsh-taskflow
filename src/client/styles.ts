@@ -1,5 +1,5 @@
 /**
- * 样式表（字符串模块：demo 与 dsh 宿主两种形态都可靠注入）。
+ * 样式表（字符串模块：jsdom 冒烟与 dsh 宿主两种形态都可靠注入）。
  *
  * 视觉方案：design/ui-preview.html 方案三「分栏」（2026-09 评审选定）——
  * 淡灰列容器 + 白卡 + 卡片左侧状态色条 + 状态点语言；工具栏与按钮遵循
@@ -8,7 +8,7 @@
  * 设计语言对齐宿主主题（token 集 = dsh 0.1.2-rc.1 dsh-client-ui-theme 实际
  * 存在的变量，深浅色与皮肤自动适配）：bg-base/bg-layer-2 分层、border-l1/2/3、
  * state-*-primary/-secondary/-tertiary/-label 语义色、button-info-fill 主按钮、
- * shadow-lv1/2/3 阴影。fallback 仅为脱离宿主的 demo 兜底。
+ * shadow-lv1/2/3 阴影。fallback 仅为脱离宿主环境（如 jsdom 冒烟）兜底。
  * NFR-01/NFR-02：:focus-visible 焦点环、prefers-reduced-motion、120ms 动效。
  *
  * @module dsh-taskflow/client

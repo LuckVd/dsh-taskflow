@@ -1,7 +1,7 @@
 /**
  * 客户端出口：框架无关挂载入口 + dsh 客户端模块插件。
  *
- * - {@link mountTaskflow}：挂载到任意 DOM（demo / 宿主壳层皆可）。
+ * - {@link mountTaskflow}：挂载到任意 DOM（渲染冒烟 / 宿主壳层皆可）。
  * - dsh client plugin（apply）：
  *   1. 侧栏顶部入口（brand 行之下、「新会话」之上；以 DOM 锚点注入，
  *      因宿主侧栏 shell 不提供该位置的槽位，宽窄栏自适应）；
@@ -29,7 +29,7 @@ import { injectStyles } from './styles.ts'
 
 export { TaskflowApp }
 export { NotificationBar }
-export { createHttpTransport, createLocalTransport } from './api.ts'
+export { createHttpTransport } from './api.ts'
 export type { TaskflowTransport } from './api.ts'
 export * from './view.ts'
 export { setBoardFocus, clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'

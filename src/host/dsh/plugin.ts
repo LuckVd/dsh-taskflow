@@ -95,6 +95,8 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       table.register({ kind: 'exact', path: '/api/taskflow/events', handler: sseHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/settings', handler: apiHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/models', handler: apiHandler }),
+      // 漏注册 = dsh 路由器直接 404，永远到不了 apiHandler（真机 2026-09-11 事故：交付物预览全挂）
+      table.register({ kind: 'exact', path: '/api/taskflow/artifact/preview', handler: apiHandler }),
     ]
     return () => {
       for (const dispose of disposeRoutes) dispose()

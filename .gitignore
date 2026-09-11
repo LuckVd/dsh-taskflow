@@ -2,6 +2,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 .vitest/
-demo-data/
 taskflow-data/
 .DS_Store

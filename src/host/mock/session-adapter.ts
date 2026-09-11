@@ -1,6 +1,6 @@
 /**
  * 测试用 mock 会话适配器：脚本化 AI 行为，记录全部调用供断言。
- * 不属于生产代码路径；用于单测/E2E 与 demo 页。
+ * 不属于生产代码路径；用于单测/E2E 与客户端渲染冒烟。
  *
  * @module dsh-taskflow/host
  */
@@ -20,8 +20,6 @@ import type { Ledger } from '../../protocol/types.ts'
 export interface MockAdapterOptions {
   /** 引擎权威状态读取口（行为脚本据此构造合法证据）。 */
   getLedger: () => Ledger
-  /** 默认终检产物的交付物声明（demo 用：指向真实存在的样例文件，体验交付物预览）。 */
-  finalizeArtifacts?: Array<{ path: string; description?: string; howVerified?: string }>
 }
 
 export type DecomposeBehavior = (input: DecomposeSessionInput, callIndex: number) => DecomposeResult | Promise<DecomposeResult>
@@ -83,7 +81,7 @@ export class MockSessionAdapter implements SessionAdapter {
   async runFinalCheckSession(input: FinalCheckSessionInput): Promise<DecomposeResult> {
     this.finalizeRuns.push(input)
     this.knownSessions.add(input.sessionId)
-    const behavior = this.finalizeBehavior ?? defaultFinalizeBehavior(this.getLedger(), this.options.finalizeArtifacts)
+    const behavior = this.finalizeBehavior ?? defaultFinalizeBehavior(this.getLedger())
     return behavior(input, this.finalizeRuns.length)
   }
 
@@ -156,11 +154,8 @@ export function buildPassingEvidence(ledger: Ledger, subtaskId: string): unknown
   }
 }
 
-/** 默认终检行为：与任务级验收标准逐条对应、全 pass 的任务级证据（可带交付物声明）。 */
-export function defaultFinalizeBehavior(
-  ledger: Ledger,
-  artifacts?: Array<{ path: string; description?: string; howVerified?: string }>,
-): DecomposeBehavior {
+/** 默认终检行为：与任务级验收标准逐条对应、全 pass 的任务级证据。 */
+export function defaultFinalizeBehavior(ledger: Ledger): DecomposeBehavior {
   return input => {
     const task = ledger.tasks.find(t => t.id === input.taskId)
     return {
@@ -169,7 +164,6 @@ export function defaultFinalizeBehavior(
         changesSummary: `（mock）任务「${task?.title}」终检：整体交付对照任务级验收标准逐条核验通过。`,
         verification: [{ label: 'mock-final-verify', output: 'OK — final review passed', passed: true }],
         selfCheck: (task?.contract.acceptance ?? []).map(a => ({ acceptanceId: a.id, verdict: 'pass', note: 'mock 终检全过' })),
-        ...(artifacts === undefined || artifacts.length === 0 ? {} : { artifacts }),
       },
     }
   }

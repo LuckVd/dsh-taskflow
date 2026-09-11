@@ -45,7 +45,9 @@ export function taskLastActivity(task: Task): number {
 }
 
 export function cardSummary(task: Task): CardSummary {
-  const doneCount = task.subtasks.filter(s => s.status === 'done').length
+  // 执行完成数：done 或 review 都算（§4.6 语义：子任务不再逐个人验，review = 执行举证完毕、
+  // 随任务终审一并定案）——否则终检就绪的任务卡片会显示「0/12 子任务」，像什么都没做。
+  const doneCount = task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length
   const totalCount = task.subtasks.length
   const blockedEvent = [...task.events].reverse().find(e => e.to === 'blocked')
   const approvalPending = (task.approvals ?? []).some(a => a.status === 'pending')
@@ -193,7 +195,9 @@ const TASK_STATUS_LABEL: Record<Task['status'], string> = {
 const SUBTASK_STATUS_LABEL: Record<Subtask['status'], string> = {
   pending: '排队',
   'in-progress': '实现中',
-  review: '待验收',
+  // §4.6：子任务是过程举证，不是人的验收对象——review 态读作「举证完毕」，
+  // 避免「待验收」误导人去逐个子任务验收。
+  review: '举证完毕',
   done: '已批准',
   rejected: '被打回',
   blocked: '受阻',

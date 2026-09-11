@@ -1,5 +1,5 @@
 /**
- * 客户端渲染冒烟（jsdom）：真实构建产物 dist/client.demo.js + 真实引擎。
+ * 客户端渲染冒烟（jsdom）：真实构建产物 dist/client.iife.js + 真实引擎。
  * 验证：挂载、看板四列、卡片、抽屉五区、验收页证据、打回流、三态 aria。
  */
 import { readFileSync, existsSync } from 'node:fs'
@@ -16,7 +16,7 @@ import { handleTaskflowRequest } from '../../src/host/http.ts'
 import { cleanup, tempDir, waitFor } from '../helpers.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const bundlePath = path.join(here, '../../dist/client.demo.js')
+const bundlePath = path.join(here, '../../dist/client.iife.js')
 
 describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 真实引擎）', () => {
   let dom: JSDOM
@@ -77,8 +77,8 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
       close(): void {}
     } as unknown as typeof EventSource
 
-    window.eval(readFileSync(bundlePath, 'utf8') + ';window.__taskflowDemo = __taskflowDemo;')
-    const api = (window as unknown as { __taskflowDemo: { mountTaskflow(root: HTMLElement, transport: unknown): () => void } }).__taskflowDemo
+    window.eval(readFileSync(bundlePath, 'utf8') + ';window.__taskflowTest = __taskflowTest;')
+    const api = (window as unknown as { __taskflowTest: { mountTaskflow(root: HTMLElement, transport: unknown): () => void } }).__taskflowTest
     expect(api).toBeTruthy()
     // 设置/模型目录走真实 HTTP 处理器（与浏览器 fetch shim 同一条路径）
     const callApi = async (method: string, pathname: string, body?: string): Promise<{ status: number; json: any }> => {
@@ -213,8 +213,8 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement).click()
     // 挂全局通知栏（bundle 出口同款 API）
     const api = (dom.window as unknown as {
-      __taskflowDemo: { mountNotificationLayer(root: HTMLElement, transport: unknown, options?: { onOpen?: () => void }): () => void }
-    }).__taskflowDemo
+      __taskflowTest: { mountNotificationLayer(root: HTMLElement, transport: unknown, options?: { onOpen?: () => void }): () => void }
+    }).__taskflowTest
     api.mountNotificationLayer(dom.window.document.body, {
       getState: () => engine.getState(),
       dispatch: (action: unknown) => engine.dispatch(action) as Promise<DispatchResult>,

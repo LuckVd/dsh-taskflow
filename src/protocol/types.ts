@@ -337,8 +337,8 @@ export const BOARD_COLUMNS: ReadonlyArray<{
 export const MAX_EVENTS_PER_TASK = 500
 /** 每条验证输出截断上限（§7.4）。 */
 export const MAX_VERIFICATION_OUTPUT_BYTES = 8 * 1024
-/** 单份证据交付物声明条数上限（§4.5b，防塞爆验收台）。 */
-export const MAX_EVIDENCE_ARTIFACTS = 10
+/** 单份证据交付物声明条数上限（§4.5b，防塞爆验收台）。20：真机任务多子报告交付可达 12 项，10 会误伤。 */
+export const MAX_EVIDENCE_ARTIFACTS = 20
 /** 交付物预览读取字节上限（§7.4b）：超出截断，首屏不整读大文件。 */
 export const MAX_ARTIFACT_PREVIEW_BYTES = 256 * 1024
 /** 单条 action 体积上限（§6）。 */

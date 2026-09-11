@@ -12,6 +12,7 @@ import {
   reviewBadgeCount,
   relativeTime,
   statusLabel,
+  subtaskStatusLabel,
 } from '../../src/client/view.ts'
 import type { Subtask, Task } from '../../src/protocol/types.ts'
 
@@ -95,14 +96,21 @@ describe('视图模型：看板分组与摘要', () => {
       ],
     })
     const summary = cardSummary(task)
-    expect(summary.doneCount).toBe(1)
+    // §4.6：子任务 review = 执行举证完毕（不再逐个人验），与 done 同计入执行进度
+    expect(summary.doneCount).toBe(2)
     expect(summary.totalCount).toBe(2)
     expect(summary.awaitingHuman).toBe('review')
-    expect(progressRatio(summary)).toBeCloseTo(0.5)
+    expect(progressRatio(summary)).toBeCloseTo(1)
 
     const blocked = cardSummary(mkTask({ status: 'blocked', events: [{ id: 'x', at: 1, from: 'in-progress', to: 'blocked', actor: 'system', reason: '拆解失败' }] }))
     expect(blocked.awaitingHuman).toBe('blocked')
     expect(blocked.blockedReason).toBe('拆解失败')
+  })
+
+  it('子任务状态标签（§4.6）：review 读作「举证完毕」而非「待验收」', () => {
+    expect(subtaskStatusLabel('review')).toBe('举证完毕')
+    expect(subtaskStatusLabel('done')).toBe('已批准')
+    expect(subtaskStatusLabel('pending')).toBe('排队')
   })
 
   it('lastActivity 取任务与子任务事件的最新值', () => {

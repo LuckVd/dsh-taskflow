@@ -65,7 +65,7 @@ export function isTrustedRequest(
 }
 
 /** 处理一次（非 SSE）请求；SSE 由 plugin 层用 {@link createSseStream} 绑定。
- *  `models`：宿主模型目录投影的提供方（dsh 适配器注入 ctx.llm 投影；demo 注入静态目录）。
+ *  `models`：宿主模型目录投影的提供方（dsh 适配器注入 ctx.llm 投影）。
  *  未提供时 GET models 返回 501（客户端展示「目录不可用」，两槽仍可保存）。
  *  `query`：URL 查询参数（artifact/preview 用 taskId/path 定位）。 */
 export async function handleTaskflowRequest(

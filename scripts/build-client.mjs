@@ -1,6 +1,8 @@
 /**
  * 客户端构建（esbuild）：
- * - dist/client.js      —— ESM bundle（demo 页 / 直接挂载用；react 等为 external）
+ * - dist/client.js      —— ESM bundle（直接挂载用；react 等为 external）
+ * - dist/client.iife.js —— IIFE 测试产物（react 内联，全局名 __taskflowTest；
+ *                         客户端渲染冒烟 test/client/render.test.ts 在 jsdom 里 eval 它）
  * - dist/client.dsh.js  —— dsh 客户端模块形态（window.__ModuleLoader__.load 工厂约定）
  */
 
@@ -25,15 +27,15 @@ await build({
   logLevel: 'info',
 })
 
-// 1.5) demo 自包含 bundle（react 内联，浏览器直接 <script type=module>）
+// 1.5) IIFE 测试产物（渲染冒烟用；react 内联，浏览器 <script> 亦可直接跑）
 await build({
   entryPoints: [path.join(root, 'src/client/index.ts')],
   bundle: true,
   format: 'iife',
   platform: 'browser',
   jsx: 'automatic',
-  outfile: path.join(outdir, 'client.demo.js'),
-  globalName: '__taskflowDemo',
+  outfile: path.join(outdir, 'client.iife.js'),
+  globalName: '__taskflowTest',
   logLevel: 'info',
 })
 

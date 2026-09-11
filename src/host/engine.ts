@@ -941,7 +941,9 @@ export class TaskflowEngine {
     const { result: input } = await this.store.mutate(ledger => {
       const task = findTask(ledger, taskId)
       if (task === null) throw new GuardError(`task ${taskId} not found`)
-      if (task.status !== 'in-progress' || !allSubtasksEvidencedOrDone(task)) return null
+      // 两种合法起点：自动终检（in-progress，T5 前）与人工补跑（review，存量任务）。
+      // 只认 in-progress 会让「补跑失败后的自动重试」在 review 态静默消失（真机 2026-09-11 事故）。
+      if ((task.status !== 'in-progress' && task.status !== 'review') || !allSubtasksEvidencedOrDone(task)) return null
       if (task.evidence !== undefined || task.finalizeSessionId !== undefined) return null
       const sessionId = `tfs_${taskId}_f${attempt}_${randomId(4)}`
       task.finalizeSessionId = sessionId
@@ -986,7 +988,9 @@ export class TaskflowEngine {
         await this.handleFinalCheckSuccess(input.taskId, input.sessionId, parsed)
         return
       } catch (error) {
-        const message = error instanceof EvidenceRejectedError ? renderEvidenceCorrection(error) : errorMessage(error)
+        // JSON 会话形制没有「把修正提示回喂会话」的通道，拒收原因只进事件留痕——
+        // 必须携带真实 problems（renderEvidenceCorrection 的多行文案会被 firstLine 砍剩空壳）
+        const message = error instanceof EvidenceRejectedError ? `证据校验拒收：${error.problems.join('；')}` : errorMessage(error)
         await this.handleFinalCheckFailure(input.taskId, input.sessionId, message)
         return
       }
@@ -1070,7 +1074,7 @@ export class TaskflowEngine {
     })
   }
 
-  /** 手动补跑终检（存量任务进 review 时无任务级证据；完成后任务停留在 review）。 */
+  /** 手动补跑/重跑终检（review 态；已有任务级证据时重跑 = 原证据作废重新声明；完成后任务停留在 review）。 */
   private async actionGenerateTaskEvidence(action: Extract<TaskflowAction, { type: 'generateTaskEvidence' }>): Promise<DispatchResult> {
     const task = this.findTask(action.taskId)
     if (task === null) return { ok: false, code: 'not-found', error: `task ${action.taskId} not found` }
@@ -1088,16 +1092,18 @@ export class TaskflowEngine {
     }
     const { result: input } = await this.store.mutate(ledger => {
       const task = findTask(ledger, action.taskId)
-      if (task === null || task.status !== 'review' || task.evidence !== undefined || task.finalizeSessionId !== undefined) {
+      if (task === null || task.status !== 'review' || task.finalizeSessionId !== undefined) {
         return null
       }
       const sessionId = `tfs_${task.id}_f1_${randomId(4)}`
       task.finalizeSessionId = sessionId
+      const reran = task.evidence !== undefined
+      task.evidence = undefined // 重跑：原任务级证据立即作废，终检成功后以新证据替代
       const model = this.modelSettings.decompose
       appendTaskNote(task, {
         actor: 'human',
         kind: 'final-check-started',
-        reason: '人工触发补跑任务级终检',
+        reason: reran ? '人工触发重跑任务级终检（原任务级证据作废）' : '人工触发补跑任务级终检',
         refs: { sessionId, ...(modelLabel(model) !== undefined ? { model: modelLabel(model) } : {}) },
       })
       return {

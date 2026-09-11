@@ -2,7 +2,7 @@ export * from './ledger.ts'
 export * from './statemachine.ts'
 export * from './engine.ts'
 export * from './prompts.ts'
-// mock 适配器：测试与 demo 用（不进 dsh 宿主路径）
+// mock 适配器：测试用（不进 dsh 宿主路径）
 export * from './mock/session-adapter.ts'
 export * from './http.ts'
 export * from './dsh/adapter.ts'

@@ -109,32 +109,3 @@ export function createHttpTransport(base = ''): TaskflowTransport {
     },
   }
 }
-
-/** demo/测试用：直接驱动引擎（无 HTTP）。 */
-export function createLocalTransport(engine: {
-  getState(): EngineState
-  dispatch(action: unknown): Promise<DispatchResult>
-  subscribe(listener: () => void): () => void
-  getModelSettings?(): ModelSettings
-  setModelSettings?(next: ModelSettings): void
-  readArtifactPreview?(taskId: string, path: string): Promise<ArtifactPreview>
-}): TaskflowTransport {
-  return {
-    getState: () => Promise.resolve(engine.getState()),
-    getCachedState: () => engine.getState(),
-    dispatch: action => engine.dispatch(action),
-    subscribe: onChange => engine.subscribe(onChange),
-    getSettings: async () => engine.getModelSettings?.() ?? { decompose: null, execution: null },
-    saveSettings: async next => {
-      engine.setModelSettings?.(next)
-      return engine.getModelSettings?.() ?? next
-    },
-    getModels: async () => ({ default: null, groups: [] }),
-    getArtifactPreview: (taskId, path) => {
-      if (engine.readArtifactPreview === undefined) {
-        return Promise.reject(new Error('当前部署不支持交付物预览'))
-      }
-      return engine.readArtifactPreview(taskId, path)
-    },
-  }
-}

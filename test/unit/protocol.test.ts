@@ -242,9 +242,12 @@ describe('交付物声明校验（§4.5b：Evidence.artifacts）', () => {
     expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: 'relative/report.md' }] })).toThrow(/绝对路径/)
   })
 
-  it('超过 10 条拒收；description/howVerified 非字符串拒收', () => {
-    const many = Array.from({ length: 11 }, (_, i) => ({ path: `/root/f${i}.md` }))
-    expect(() => parseEvidenceInput({ ...base, artifacts: many })).toThrow(/at most 10/)
+  it('超过 20 条拒收；description/howVerified 非字符串拒收', () => {
+    const many = Array.from({ length: 21 }, (_, i) => ({ path: `/root/f${i}.md` }))
+    expect(() => parseEvidenceInput({ ...base, artifacts: many })).toThrow(/at most 20/)
+    // 边界内 20 条（真机任务多子报告交付可达 12 项）放行
+    const edge = Array.from({ length: 20 }, (_, i) => ({ path: `/root/f${i}.md` }))
+    expect(parseEvidenceInput({ ...base, artifacts: edge }).artifacts).toHaveLength(20)
     expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: '/root/a.md', description: 3 as never }] })).toThrow(/description/)
     expect(() => parseEvidenceInput({ ...base, artifacts: [{ path: '/root/a.md', howVerified: true as never }] })).toThrow(/howVerified/)
   })

@@ -74,7 +74,7 @@ describe('宿主壳层集成面（会话切换 + 降级）', () => {
     expect(listeners).toHaveLength(0)
   })
 
-  it('无 sessions 服务的宿主（或 demo 形态）：apply 照常完成入口安装', () => {
+  it('无 sessions 服务的宿主：apply 照常完成入口安装', () => {
     buildShell()
     const { ctx } = fakeEffectCollector()
     expect(() => clientApply({ ...ctx } as MinimalClientContext)).not.toThrow()

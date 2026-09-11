@@ -1037,6 +1037,101 @@ describe('任务级终检与打回定位（2026-09-11 语义）', () => {
     }
   })
 
+  it('review 态补跑终检失败 → 自动重试真正发车、事件携带真实拒收原因（真机 2026-09-11 事故回归）', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      // 第 1、2 轮（自动终检）：崩溃两次 → 兜底进 review；第 3 轮（人工补跑）：
+      // 产出 artifacts 超上限的证据 → parse 拒收；第 4 轮（重试）：合法证据 → 落库
+      adapter.finalizeBehavior = async input => {
+        const task = engine.getState().ledger.tasks.find(t => t.id === input.taskId)
+        const acceptance = task?.contract.acceptance ?? []
+        if (adapter.finalizeRuns.length <= 2) return { kind: 'failed', error: 'mock 自动终检崩溃' }
+        if (adapter.finalizeRuns.length === 3) {
+          return {
+            kind: 'ok',
+            output: {
+              changesSummary: '终检摘要',
+              verification: [{ label: 'check', output: 'ok', passed: true }],
+              selfCheck: [],
+              artifacts: Array.from({ length: 21 }, (_, i) => ({ path: `/root/f${i}.md` })),
+            },
+          }
+        }
+        return {
+          kind: 'ok',
+          output: {
+            changesSummary: '终检通过',
+            verification: [{ label: 'check', output: 'ok', passed: true }],
+            selfCheck: acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '重试通过' })),
+          },
+        }
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(adapter.finalizeRuns.length).toBe(2)
+      expect(taskOf(engine, taskId).evidence).toBeUndefined()
+
+      // 人工补跑：第 3 轮拒收后，重试必须真正发车（修复前：review 态守卫不认，静默消失）
+      const rerun = await engine.dispatch({ type: 'generateTaskEvidence', requestId: 'req-gen-ev2', taskId })
+      expect(rerun.ok, JSON.stringify(rerun)).toBe(true)
+      await waitFor(() => taskOf(engine, taskId).evidence !== undefined)
+
+      expect(adapter.finalizeRuns.length).toBe(4)
+      expect(statusOf(engine, taskId)()).toBe('review')
+      expect(taskOf(engine, taskId).finalizeSessionId).toBeUndefined()
+      const retryEvents = taskOf(engine, taskId).events.filter(e => e.kind === 'final-check-retry')
+      expect(retryEvents.length).toBe(2) // 自动阶段 1 条 + 补跑拒收 1 条
+      expect(retryEvents.some(e => (e.reason ?? '').includes('at most 20'))).toBe(true) // 真实拒收原因（而非只留通用文案首行）
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('重跑终检（已有任务级证据）→ 原证据作废、新证据替代（交付物口径调整入口）', async () => {
+    const dir = await tempDir()
+    try {
+      const oldReport = path.join(dir, 'v1-全部产物清单.md')
+      const newReport = path.join(dir, 'v2-最终报告.md')
+      await writeFile(oldReport, '# v1', 'utf8')
+      await writeFile(newReport, '# v2', 'utf8')
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      // 第一次终检按旧口径声明全部产物；重跑按新口径只声明核心交付物
+      adapter.finalizeBehavior = async input => {
+        const task = engine.getState().ledger.tasks.find(t => t.id === input.taskId)
+        const acceptance = task?.contract.acceptance ?? []
+        const declared = adapter.finalizeRuns.length === 1 ? oldReport : newReport
+        return {
+          kind: 'ok',
+          output: {
+            changesSummary: '终检摘要',
+            verification: [{ label: 'check', output: 'ok', passed: true }],
+            selfCheck: acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass' as const, note: '通过' })),
+            artifacts: [{ path: declared, description: '最终交付物' }],
+          },
+        }
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(taskOf(engine, taskId).evidence!.artifacts![0]!.path).toBe(oldReport)
+
+      // 人工重跑：原证据立即作废，新证据替代，任务留在 review
+      const rerun = await engine.dispatch({ type: 'generateTaskEvidence', requestId: 'req-rerun-ev', taskId })
+      expect(rerun.ok, JSON.stringify(rerun)).toBe(true)
+      await waitFor(
+        () => taskOf(engine, taskId).finalizeSessionId === undefined && taskOf(engine, taskId).evidence !== undefined,
+      )
+      expect(taskOf(engine, taskId).evidence!.artifacts![0]!.path).toBe(newReport)
+      expect(taskOf(engine, taskId).events.some(e => (e.reason ?? '').includes('重跑任务级终检') && (e.reason ?? '').includes('作废'))).toBe(true)
+      expect(statusOf(engine, taskId)()).toBe('review')
+      expect(adapter.finalizeRuns.length).toBe(2)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
   it('打回定位：AI 把批语映射到子集 → 仅该子任务返工，其余保持 review 不重跑', async () => {
     const dir = await tempDir()
     try {

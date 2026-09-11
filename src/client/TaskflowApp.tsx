@@ -709,7 +709,7 @@ function AcceptanceList({ items, title }: { items: AcceptanceItem[]; title: stri
 function SubtasksTab({ task }: { task: Task }): JSX.Element {
   return (
     <div className="tf-section">
-      <span className="tf-section-title">子任务（{task.subtasks.filter(s => s.status === 'done').length}/{task.subtasks.length} done）</span>
+      <span className="tf-section-title">子任务（{task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length}/{task.subtasks.length} 完成）</span>
       <div className="tf-list">
         {task.subtasks.map(sub => (
           <SubtaskItem key={sub.id} sub={sub} />
@@ -839,6 +839,13 @@ function ReviewTab({
             </span>
           ) : (
             <span className="tf-hint">子任务执行中；全部完成后 AI 会先对照任务级验收标准做终检，再交给你终批。</span>
+          )}
+          {taskEvidence !== undefined && task.status === 'review' && (
+            <span className="tf-hint">
+              终检结论或交付物口径不对？
+              <button type="button" className="tf-link-btn" disabled={busy} onClick={() => void act({ type: 'generateTaskEvidence' })}>重跑 AI 终检</button>
+              （原任务级证据作废，重新核验并声明交付物）
+            </span>
           )}
           {triaging && <span className="tf-hint">AI 正在根据批语定位需返工的子任务（其余子任务不会重跑）…</span>}
           <div className="tf-section">
