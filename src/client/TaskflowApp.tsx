@@ -459,7 +459,9 @@ function DetailModal({
   onRefresh: () => Promise<void>
   transport: TaskflowTransport
 }): JSX.Element {
-  const [tab, setTab] = useState<TabId>(task.status === 'review' ? 'review' : 'contract')
+  // 默认落点：review = 等终批看判定；done = 验收完成重点看产物与验收结果（2026-09-12）；
+  // 其余状态从合同看起。
+  const [tab, setTab] = useState<TabId>(task.status === 'review' || task.status === 'done' ? 'review' : 'contract')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
@@ -821,6 +823,7 @@ function ReviewTab({
   const [procOpen, setProcOpen] = useState(false)
   const [openSubId, setOpenSubId] = useState<string | null>(null)
   const inReview = task.subtasks.filter(s => s.status === 'review')
+  const done = task.status === 'done'
   const canReject = inReview.length > 0
   const atLimit = task.maxRounds !== null && task.round + 1 > task.maxRounds
   const acceptance = task.contract.acceptance
@@ -848,6 +851,10 @@ function ReviewTab({
               <CheckBadge passed={taskStats.passed} total={taskStats.total} />
             )}
           </div>
+          {/* done 态产物第一眼：交付物提到结论带之前（验收完重点看产物，不用翻） */}
+          {done && (taskEvidence?.artifacts?.length ?? 0) > 0 && (
+            <ArtifactsBlock artifacts={taskEvidence?.artifacts ?? []} previewArtifact={previewArtifact} />
+          )}
           {taskEvidence !== undefined && taskStats.total > 0 && (
             <VerdictBanner
               passed={taskStats.passed}
@@ -864,6 +871,7 @@ function ReviewTab({
               evidence={taskEvidence}
               headExtra={<span className="tf-chip tf-chip-mono">AI 终检</span>}
               previewArtifact={previewArtifact}
+              hideArtifacts={done}
             />
           ) : finalizing ? (
             <span className="tf-hint">AI 终检中：正在对照任务级验收标准核验整体交付；完成后进入人工终批——你不需要逐个看子任务。</span>
@@ -1022,6 +1030,7 @@ function EvidenceView({
   status,
   headExtra,
   previewArtifact,
+  hideArtifacts = false,
 }: {
   title: string
   acceptance: AcceptanceItem[]
@@ -1031,6 +1040,8 @@ function EvidenceView({
   headExtra?: JSX.Element
   /** 交付物预览口（§4.5b）；缺省 = 只展示声明不提供预览。 */
   previewArtifact?: (path: string) => Promise<ArtifactPreview>
+  /** 交付物区块已被调用方前置渲染（done 态判定面首屏），此处不再重复。 */
+  hideArtifacts?: boolean
 }): JSX.Element {
   const stats = checkStatsOf(acceptance, evidence)
   const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
@@ -1040,8 +1051,7 @@ function EvidenceView({
   const summaryLong = evidence.changesSummary.length > 160
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [openVerify, setOpenVerify] = useState<Record<number, boolean>>({})
-  const [openArtifacts, setOpenArtifacts] = useState<Record<string, boolean>>({})
-  const hasArtifacts = (evidence.artifacts?.length ?? 0) > 0
+  const hasArtifacts = (evidence.artifacts?.length ?? 0) > 0 && !hideArtifacts
 
   return (
     <article className="tf-ev">
@@ -1054,21 +1064,7 @@ function EvidenceView({
       </div>
 
       {hasArtifacts && (
-        <section className="tf-ev-section tf-artifacts" data-testid="deliverables">
-          <div className="tf-ev-sechead">
-            <span className="tf-section-title">交付物（{evidence.artifacts?.length}）</span>
-            <span className="tf-hint">产物本体——最需要验收的东西，点「预览」直接查看</span>
-          </div>
-          {(evidence.artifacts ?? []).map((artifact, index) => (
-            <ArtifactRow
-              key={`${artifact.path}-${index}`}
-              artifact={artifact}
-              open={openArtifacts[artifact.path] ?? false}
-              preview={previewArtifact}
-              onToggle={() => setOpenArtifacts(map => ({ ...map, [artifact.path]: !(map[artifact.path] ?? false) }))}
-            />
-          ))}
-        </section>
+        <ArtifactsBlock artifacts={evidence.artifacts ?? []} previewArtifact={previewArtifact} />
       )}
 
       <section className="tf-ev-section">
@@ -1251,6 +1247,34 @@ type PreviewState =
   | { phase: 'loading' }
   | { phase: 'error'; message: string }
   | { phase: 'done'; data: ArtifactPreview }
+
+/** 交付物区块（产物清单 + 只读预览）。终检卡内与 done 态判定面首屏共用。 */
+function ArtifactsBlock({
+  artifacts,
+  previewArtifact,
+}: {
+  artifacts: Artifact[]
+  previewArtifact?: (path: string) => Promise<ArtifactPreview>
+}): JSX.Element {
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  return (
+    <div className="tf-ev-section tf-artifacts" data-testid="deliverables">
+      <div className="tf-ev-sechead">
+        <span className="tf-section-title">交付物（{artifacts.length}）</span>
+        <span className="tf-hint" style={{ marginLeft: 'auto' }}>产物本体——最需要看的东西，点「预览」直接查看</span>
+      </div>
+      {artifacts.map((artifact, index) => (
+        <ArtifactRow
+          key={`${artifact.path}-${index}`}
+          artifact={artifact}
+          open={open[artifact.path] ?? false}
+          preview={previewArtifact}
+          onToggle={() => setOpen(map => ({ ...map, [artifact.path]: !(map[artifact.path] ?? false) }))}
+        />
+      ))}
+    </div>
+  )
+}
 
 /** 单条交付物：路径 + 说明 + 核验方式 + 复制路径，可展开只读预览。 */
 function ArtifactRow({
