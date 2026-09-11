@@ -169,7 +169,9 @@ export const TASKFLOW_CSS = `
 .tf-modal-foot .tf-actions { padding-top: 0; }
 .tf-modal .tf-banner { margin: 0; }
 
-/* —— 验收工作台（2026-09-11 语义：任务级判定面优先 + 过程举证折叠附录 + 吸底裁决栏）—— */
+/* —— 验收工作台（2026-09-11 语义：任务级判定面优先 + 过程举证折叠附录 + 吸底裁决栏；
+    2026-09-11 改版（方案B）：判定面 = 白卡蓝左条（重）vs 过程举证 = 无卡发丝线（轻），
+    结论带 + 逐条语义色条，去重后验收标准只渲染一份）—— */
 .tf-review { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tf-review-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 2px 4px 12px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
 .tf-review-scroll > * { flex: none; }
@@ -178,13 +180,31 @@ export const TASKFLOW_CSS = `
 .tf-review-foot .tf-btn { flex: none; }
 .tf-task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 
-/* —— 执行过程举证（手风琴附录）—— */
-.tf-proc { display: flex; flex-direction: column; gap: 4px; }
-.tf-proc-item { border: 1px solid ${V.borderL1}; border-radius: 10px; background: ${V.bgBase}; overflow: hidden; }
-.tf-proc-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; font-size: 12.5px; color: ${V.label2}; transition: background-color 120ms ease; }
+/* —— 判定面容器（任务级）与结论带（方案B）—— */
+.tf-judge { display: flex; flex-direction: column; gap: 12px; background: ${V.bgBase}; border: 1px solid ${V.borderL1}; border-left: 3px solid ${V.business}; border-radius: 12px; padding: 14px; box-shadow: ${V.shadow1}; }
+.tf-banner2 { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 10px; background: ${V.warnTertiary}; border: 1px solid ${V.borderL1}; }
+.tf-banner2.allpass { background: ${V.successTertiary}; }
+.tf-banner2.allfail { background: ${V.errorTertiary}; }
+.tf-banner-rate { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; color: ${V.warnLabel}; white-space: nowrap; }
+.tf-banner2.allpass .tf-banner-rate { color: ${V.inkGreen}; }
+.tf-banner2.allfail .tf-banner-rate { color: ${V.errorSecondary}; }
+.tf-banner-rate small { font-size: 12px; font-weight: 600; color: ${V.label3}; }
+.tf-banner-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.tf-banner-title { font-size: 13px; font-weight: 700; }
+.tf-banner-note { font-size: 12px; color: ${V.label2}; line-height: 1.5; overflow-wrap: anywhere; }
+.tf-banner-bar { height: 4px; border-radius: 999px; background: ${V.bgLayer2}; overflow: hidden; }
+.tf-banner-bar i { display: block; height: 100%; border-radius: 999px; background: ${V.warn}; transition: width 240ms ease; }
+.tf-banner2.allpass .tf-banner-bar i { background: ${V.success}; }
+.tf-banner2.allfail .tf-banner-bar i { background: ${V.error}; }
+
+/* —— 执行过程举证（手风琴附录；方案B 降级为无卡发丝线行，与判定面白卡形成主次）—— */
+.tf-proc { display: flex; flex-direction: column; gap: 0; }
+.tf-proc-item { display: flex; flex-direction: column; }
+.tf-proc-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 4px; font-size: 12.5px; color: ${V.label2}; border-top: 1px solid ${V.borderL1}; transition: background-color 120ms ease; }
+.tf-proc-item:first-of-type .tf-proc-row { border-top: none; }
 .tf-proc-row:hover { background: ${V.bgHover}; color: ${V.label}; }
-.tf-proc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.tf-proc-item > .tf-ev, .tf-proc-item > .tf-item, .tf-proc-item > span:last-child { border-top: 1px solid ${V.borderL1}; padding: 12px; margin: 0; }
+.tf-proc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: ${V.label}; }
+.tf-proc-item > .tf-ev, .tf-proc-item > .tf-item { border-top: 1px solid ${V.borderL1}; padding: 12px; margin: 0; }
 .tf-proc-item > .tf-ev { border-top: 1px solid ${V.borderL1}; padding: 12px; border-radius: 0; }
 
 /* —— 证据详情（分层：判定先行 / 自检前置 / 摘要限高 / 验证折叠）—— */
@@ -204,7 +224,12 @@ export const TASKFLOW_CSS = `
 .tf-ev-sechead .tf-link-btn { margin-left: auto; }
 .tf-ev-summary { font-size: 13px; line-height: 1.6; color: ${V.label2}; overflow-wrap: anywhere; white-space: pre-wrap; }
 .tf-ev-summary.tf-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.tf-ev-check { display: flex; align-items: flex-start; gap: 8px; }
+.tf-ev-check { display: flex; align-items: flex-start; gap: 8px; border-left: 3px solid transparent; }
+/* 方案B：逐条自检行的语义色条——pass 低调绿条 / partial 橙底 / fail 红底加粗，扫一眼定位未过项 */
+.tf-ev-check-pass { border-left-color: ${V.success}; }
+.tf-ev-check-partial { background: ${V.warnTertiary}; border-left-color: ${V.warn}; border-radius: 8px; }
+.tf-ev-check-fail { background: ${V.errorTertiary}; border-left-color: ${V.errorSecondary}; border-radius: 8px; }
+.tf-ev-check-fail .tf-ev-check-ac { font-weight: 600; }
 .tf-ev-check .tf-verdict { margin-top: 2px; }
 .tf-ev-check-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .tf-ev-check-ac { font-size: 13px; color: ${V.label}; overflow-wrap: anywhere; }

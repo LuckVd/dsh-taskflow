@@ -780,6 +780,32 @@ function CheckBadge({ passed, total, mini }: { passed: number; total: number; mi
   )
 }
 
+/** 结论带（方案B，2026-09-11）：任务级判定面顶部——通过率 + 差额 + 进度条，
+ *  整条语义底色（全过绿 / 全挂红 / 其余橙），一眼读出「过没过、差在哪」。
+ *  正常只出现在已有任务级终检证据时（taskStats.total > 0 由调用方保证）。 */
+function VerdictBanner({ passed, total, missingIds }: { passed: number; total: number; missingIds: string[] }): JSX.Element {
+  const concerns = total - passed
+  const cls = concerns === 0 ? 'allpass' : concerns === total ? 'allfail' : ''
+  const pct = Math.round((passed / total) * 100)
+  return (
+    <div className={`tf-banner2${cls === '' ? '' : ` ${cls}`}`} role="status" aria-label={`自检 ${passed}/${total} 通过`}>
+      <span className="tf-banner-rate">{passed}/{total}<small> 通过</small></span>
+      <span className="tf-banner-mid">
+        <span className="tf-banner-title">
+          {concerns === 0 ? '整体交付满足合同，可直接终批' : `${concerns} 项未完全满足，建议在批语中点名后打回`}
+        </span>
+        <span className="tf-banner-bar"><i style={{ width: `${pct}%` }} aria-hidden="true" /></span>
+        <span className="tf-banner-note">
+          {concerns === 0
+            ? '全量验收标准逐条核验通过'
+            : `未完全通过的项：${missingIds.join('、')}——见下方色标清单`}
+        </span>
+      </span>
+      <span className={`tf-verdict ${concerns === 0 ? 'tf-verdict-pass' : 'tf-verdict-partial'}`}>{concerns === 0 ? '达标' : '待补'}</span>
+    </div>
+  )
+}
+
 function ReviewTab({
   task,
   busy,
@@ -814,14 +840,23 @@ function ReviewTab({
   return (
     <div className="tf-review">
       <div className="tf-review-scroll">
-        {/* —— 任务级验收（人的判定面：只对合同，不对子任务）—— */}
-        <section className="tf-section">
+        {/* —— 任务级验收（人的判定面：只对合同，不对子任务；方案B 白卡判定面 + 结论带）—— */}
+        <section className="tf-section tf-judge">
           <div className="tf-task-head">
             <span className="tf-section-title">任务验收（对照任务合同）</span>
             {taskEvidence !== undefined && taskStats.total > 0 && (
               <CheckBadge passed={taskStats.passed} total={taskStats.total} />
             )}
           </div>
+          {taskEvidence !== undefined && taskStats.total > 0 && (
+            <VerdictBanner
+              passed={taskStats.passed}
+              total={taskStats.total}
+              missingIds={acceptance
+                .filter(item => (taskCheckById?.get(item.id)?.verdict ?? 'fail') !== 'pass')
+                .map(item => item.id)}
+            />
+          )}
           {taskEvidence !== undefined ? (
             <EvidenceView
               title="任务级终检（整体交付对照合同）"
@@ -848,25 +883,21 @@ function ReviewTab({
             </span>
           )}
           {triaging && <span className="tf-hint">AI 正在根据批语定位需返工的子任务（其余子任务不会重跑）…</span>}
-          <div className="tf-section">
-            <span className="tf-section-title">任务级验收标准（{acceptance.length}）</span>
-            {acceptance.length === 0 && <span className="tf-hint">（空 —— AI 拆解时会补全建议稿）</span>}
-            {acceptance.map(item => {
-              const check = taskCheckById?.get(item.id)
-              const verdict = taskEvidence === undefined ? undefined : (check?.verdict ?? 'fail')
-              return (
+          {/* 无终检证据时（存量任务/兜底）标准清单独立成区作对照；有终检证据时由终检卡的
+              「逐条自检」承担——验收标准只渲染一份（2026-09-11 方案B 去重） */}
+          {taskEvidence === undefined && (
+            <div className="tf-section">
+              <span className="tf-section-title">任务级验收标准（{acceptance.length}）</span>
+              {acceptance.length === 0 && <span className="tf-hint">（空 —— AI 拆解时会补全建议稿）</span>}
+              {acceptance.map(item => (
                 <div className="tf-ev-check" key={item.id}>
-                  {verdict !== undefined && (
-                    <span className={`tf-verdict tf-verdict-${verdict}`}>{check?.verdict ?? '缺失'}</span>
-                  )}
                   <span className="tf-ev-check-body">
                     <span className="tf-ev-check-ac">{item.text}</span>
-                    {check?.note !== undefined && <span className="tf-ev-check-note">{check.note}</span>}
                   </span>
                 </div>
-              )
-            })}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* —— 执行过程举证（AI 的过程留痕，非验收判定面）—— */}
@@ -1054,7 +1085,7 @@ function EvidenceView({
               const check = checkById.get(item.id)
               const verdict = check?.verdict ?? 'fail'
               return (
-                <div className="tf-ev-check" key={item.id}>
+                <div className={`tf-ev-check tf-ev-check-${verdict}`} key={item.id}>
                   <span className={`tf-verdict tf-verdict-${verdict}`}>{check?.verdict ?? '缺失'}</span>
                   <span className="tf-ev-check-body">
                     <span className="tf-ev-check-ac">{item.text}</span>
