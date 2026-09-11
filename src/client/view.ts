@@ -4,7 +4,7 @@
  * @module dsh-taskflow/client
  */
 
-import type { Ledger, Subtask, Task, TaskEvent, SubtaskEvent } from '../protocol/types.ts'
+import type { ApprovalRecord, Ledger, Subtask, Task, TaskEvent, SubtaskEvent } from '../protocol/types.ts'
 import { BOARD_COLUMNS } from '../protocol/types.ts'
 
 export interface TaskFilter {
@@ -22,8 +22,8 @@ export interface CardSummary {
   lastActivity: number
   /** 受阻原因（blocked 时的最近原因事件）。 */
   blockedReason?: string
-  /** 需要人工动作的提示（验收/权限确认/重试）。 */
-  awaitingHuman?: 'review' | 'permission' | 'blocked' | 'decompose'
+  /** 需要人工动作的提示（审批最急 > 验收 > 权限确认 > 重试 > 拆解）。 */
+  awaitingHuman?: 'approval' | 'review' | 'permission' | 'blocked' | 'decompose'
 }
 
 /** blocked 回原列（§4.9）：有子任务 → 实现中列标红；拆解期受阻 → 待办列。 */
@@ -48,8 +48,10 @@ export function cardSummary(task: Task): CardSummary {
   const doneCount = task.subtasks.filter(s => s.status === 'done').length
   const totalCount = task.subtasks.length
   const blockedEvent = [...task.events].reverse().find(e => e.to === 'blocked')
+  const approvalPending = (task.approvals ?? []).some(a => a.status === 'pending')
   let awaitingHuman: CardSummary['awaitingHuman']
-  if (task.status === 'review') awaitingHuman = 'review'
+  if (approvalPending) awaitingHuman = 'approval'
+  else if (task.status === 'review') awaitingHuman = 'review'
   else if (task.events.some(e => e.kind === 'awaiting-permission-confirm')) awaitingHuman = 'permission'
   else if (task.status === 'blocked') awaitingHuman = 'blocked'
   else if (task.status === 'draft') awaitingHuman = 'decompose'
@@ -62,6 +64,41 @@ export function cardSummary(task: Task): CardSummary {
     ...(blockedEvent?.reason !== undefined ? { blockedReason: blockedEvent.reason } : {}),
     ...(awaitingHuman !== undefined ? { awaitingHuman } : {}),
   }
+}
+
+// —— 权限审批（§7.1b）——
+
+/** 待裁决审批的视图投影（通知栏与抽屉审批区共用）。 */
+export interface PendingApprovalView {
+  id: string
+  taskId: string
+  subtaskId: string
+  subtaskTitle: string
+  sessionId: string
+  toolName: string
+  reason?: string
+  createdAt: number
+}
+
+export function pendingApprovalsOf(task: Task): PendingApprovalView[] {
+  const titleOf = new Map(task.subtasks.map(s => [s.id, s.title]))
+  return (task.approvals ?? [])
+    .filter(record => record.status === 'pending')
+    .map(record => ({
+      id: record.id,
+      taskId: task.id,
+      subtaskId: record.subtaskId,
+      subtaskTitle: titleOf.get(record.subtaskId) ?? record.subtaskId,
+      sessionId: record.sessionId,
+      toolName: record.toolName,
+      ...(record.reason !== undefined ? { reason: record.reason } : {}),
+      createdAt: record.createdAt,
+    }))
+}
+
+/** 全部任务的待裁决审批数（工具栏角标）。 */
+export function pendingApprovalCount(tasks: readonly Task[]): number {
+  return tasks.reduce((sum, task) => sum + (task.approvals?.filter(a => a.status === 'pending').length ?? 0), 0)
 }
 
 /** 看板列分组（archived 不出现在主视图，US-13）。 */
@@ -111,6 +148,8 @@ export interface TimelineEntry {
   detail?: string
   subtaskId?: string
   sessionId?: string
+  /** 会话模型标签（refs.model 留痕；缺省 = 宿主默认）。 */
+  model?: string
   /** 是否状态变化（用于视觉区分）。 */
   isTransition: boolean
 }
@@ -132,6 +171,11 @@ const KIND_LABEL: Record<string, string> = {
   'awaiting-permission-confirm': '等待权限确认',
   'max-rounds-raised': '调整迭代上限',
   'reject-blocked': '打回受阻',
+  'approval-requested': '发起权限审批',
+  'approval-elevated': '审批 · 完全放行',
+  'approval-rejected': '审批 · 拒绝',
+  'approval-expired': '审批失效',
+  'session-stalled': '看门狗超时',
 }
 
 const TASK_STATUS_LABEL: Record<Task['status'], string> = {
@@ -168,6 +212,7 @@ function describeTaskEvent(event: TaskEvent): TimelineEntry {
     ...(event.reason !== undefined ? { detail: event.reason } : {}),
     ...(event.refs?.subtaskId !== undefined ? { subtaskId: event.refs.subtaskId } : {}),
     ...(event.refs?.sessionId !== undefined ? { sessionId: event.refs.sessionId } : {}),
+    ...(event.refs?.model !== undefined ? { model: event.refs.model } : {}),
     isTransition,
   }
 }
@@ -185,6 +230,7 @@ function describeSubtaskEvent(event: SubtaskEvent, subtask: Subtask): TimelineEn
     ...(event.reason !== undefined ? { detail: event.reason } : {}),
     subtaskId: subtask.id,
     ...(event.refs?.sessionId !== undefined ? { sessionId: event.refs.sessionId } : {}),
+    ...(event.refs?.model !== undefined ? { model: event.refs.model } : {}),
     isTransition,
   }
 }
@@ -228,6 +274,12 @@ export function progressRatio(summary: CardSummary): number {
     return summary.task.status === 'draft' ? 0 : 0.4
   }
   return summary.doneCount / summary.totalCount
+}
+
+/** 证据产出会话的模型标签（子任务留痕反查；无记录 = 宿主默认）。 */
+export function modelForSession(sub: Subtask, sessionId: string): string | undefined {
+  const event = [...sub.history].reverse().find(event => event.refs?.sessionId === sessionId && event.refs?.model !== undefined)
+  return event?.refs?.model
 }
 
 export type { Ledger }

@@ -47,9 +47,13 @@ describe('E2E 主流程：一句话 → done（含一次打回迭代）', () => 
       expect(firstSub.evidence!.changesSummary).toBeTruthy()
       expect(firstSub.evidence!.verification.length).toBeGreaterThan(0)
       expect(firstSub.evidence!.selfCheck).toHaveLength(firstSub.acceptance.length)
-      expect(task0(engine, taskId).status).toBe('review') // T5
+      // T5 延后（2026-09-11 语义）：全部子任务证据齐备 → AI 任务级终检 → 才进 review
+      await waitFor(() => task0(engine, taskId).status === 'review')
+      expect(adapter.finalizeRuns.length).toBeGreaterThanOrEqual(1)
+      expect(task0(engine, taskId).evidence).toBeDefined()
+      expect(task0(engine, taskId).evidence!.selfCheck).toHaveLength(task0(engine, taskId).contract.acceptance.length)
 
-      // ── 4. 人工打回：批语必填，注入下一轮（US-07/US-08）──
+      // ── 4. 人工打回：批语必填，注入下一轮（US-07/US-08）；返工范围由 AI triage 定位 ──
       const rejected = await engine.dispatch({
         type: 'rejectSubtask',
         requestId: 'e2e-reject',
@@ -57,7 +61,10 @@ describe('E2E 主流程：一句话 → done（含一次打回迭代）', () => 
         comment: '百分比按钮在除数为零时抛异常；请处理边界并补测试用例。',
       })
       expect(rejected.ok).toBe(true)
-      expect(rejected.subtaskIds).toHaveLength(2)
+      expect(rejected.subtaskIds).toEqual([]) // 返回值为空：范围由 AI 异步定位
+      expect(adapter.triageRuns.length).toBe(1)
+      expect(adapter.triageRuns[0]!.prompt).toContain('除数为零')
+      await waitFor(() => task0(engine, taskId).round === 2)
       // 下一轮提示词包含批语原文 + 来源声明（§4.7/§7.3）
       await waitFor(() => adapter.executionRuns.some(r => r.round >= 2 && r.prompt.includes('除数为零')))
       const round2Prompt = adapter.executionRuns.find(r => r.round >= 2)!.prompt
@@ -132,3 +139,85 @@ function task0(engine: TaskflowEngine, taskId: string) {
   if (task === undefined) throw new Error(`task ${taskId} missing`)
   return task
 }
+
+describe('E2E 审批模式：提权审批两档裁决（§7.1b）', () => {
+  it('放行支线：审批 pending → 完全放行 → 证据齐全进验收；拒绝支线：拒绝 → 报障受阻', async () => {
+    const dir = await tempDir('taskflow-e2e-appr-')
+    try {
+      const box: { engine?: TaskflowEngine } = {}
+      const adapter = new MockSessionAdapter({ getLedger: () => box.engine!.getState().ledger })
+      const asked = new Set<string>()
+      adapter.executionBehavior = async input => {
+        // 每任务首个执行会话发起提权审批（后续子任务直接执行，保证收束）
+        if (!asked.has(input.taskId)) {
+          asked.add(input.taskId)
+          const decision = await input.approvals.request({
+            sessionId: input.sessionId,
+            toolName: 'write',
+            reason: '需要写入产物文件',
+          })
+          if (decision === 'rejected') {
+            await input.tools.reportBlocker('提权被拒：无法写文件')
+            return
+          }
+        }
+        const result = await input.tools.submitEvidence(buildPassingEvidence(box.engine!.getState().ledger, input.subtaskId))
+        if (!result.accepted) throw new Error(`evidence rejected: ${result.correction}`)
+      }
+      const engine = new TaskflowEngine(new LedgerStore(path.join(dir, 'ledger.json')), adapter, DEFAULT_ENGINE_CONFIG)
+      box.engine = engine
+      await engine.boot()
+
+      // ── 放行支线：一句话创建（approval 模式）→ 审批 → 完全放行 → review ──
+      const created = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'e2e-appr-create',
+        title: '生成周报 markdown',
+        description: '汇总本周进展，写成 markdown 文件。',
+        pins: { executionMode: 'approval' },
+      })
+      expect(created.ok).toBe(true)
+      const taskId = created.taskId!
+
+      await waitFor(() => task0(engine, taskId).approvals?.some(a => a.status === 'pending') ?? false)
+      // 子任务事件与执行会话都带审批留痕
+      expect(task0(engine, taskId).subtasks[0]!.history.some(e => e.kind === 'approval-requested')).toBe(true)
+      expect(adapter.executionRuns[0]?.executionMode).toBe('approval')
+      const record = task0(engine, taskId).approvals![0]!
+
+      const allowed = await engine.dispatch({
+        type: 'decideApproval', requestId: 'e2e-appr-allow', taskId, approvalId: record.id, decision: 'allow',
+      })
+      expect(allowed.ok).toBe(true)
+      await waitFor(() => task0(engine, taskId).status === 'review')
+      expect(task0(engine, taskId).approvals![0]!.status).toBe('elevated')
+      expect(task0(engine, taskId).subtasks.every(s => s.evidence !== undefined)).toBe(true)
+
+      // ── 拒绝支线：第二个任务，拒绝提权 → 报障 → blocked ──
+      const created2 = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'e2e-appr-create-2',
+        title: '清理构建缓存',
+        description: '删除过期缓存文件并验证构建仍可通过。',
+        pins: { executionMode: 'approval' },
+      })
+      expect(created2.ok).toBe(true)
+      const taskId2 = created2.taskId!
+      await waitFor(() => task0(engine, taskId2).approvals?.some(a => a.status === 'pending') ?? false)
+      const record2 = task0(engine, taskId2).approvals![0]!
+
+      const rejected = await engine.dispatch({
+        type: 'decideApproval', requestId: 'e2e-appr-reject', taskId: taskId2, approvalId: record2.id,
+        decision: 'reject', note: '缓存目录只读，先别动',
+      })
+      expect(rejected.ok).toBe(true)
+      await waitFor(() => task0(engine, taskId2).status === 'blocked')
+      expect(task0(engine, taskId2).approvals![0]!.status).toBe('rejected')
+      expect(task0(engine, taskId2).subtasks[0]!.history.some(e => e.kind === 'blocker-reported')).toBe(true)
+      // 拒绝批语留痕
+      expect(task0(engine, taskId2).subtasks[0]!.history.some(e => (e.reason ?? '').includes('先别动'))).toBe(true)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+})

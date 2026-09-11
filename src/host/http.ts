@@ -2,16 +2,21 @@
  * /api/taskflow/* HTTP 层（§6）：与框架无关的处理器 + SSE。
  *
  * 端点（同源，沿宿主浏览器信任围栏形态）：
- * - GET  /api/taskflow/state   全量带 revision 快照（+ health）
- * - GET  /api/taskflow/events  SSE：revision/调度变化推送（断线重连拉全量，NFR-04）
- * - POST /api/taskflow/action  幂等 action 提交（requestId 去重，≤64KiB）
+ * - GET  /api/taskflow/state     全量带 revision 快照（+ health）
+ * - GET  /api/taskflow/events    SSE：revision/调度变化推送（断线重连拉全量，NFR-04）
+ * - POST /api/taskflow/action    幂等 action 提交（requestId 去重，≤64KiB）
+ * - GET  /api/taskflow/settings  全局模型设置（两槽，§PLAN-MODEL）
+ * - PUT  /api/taskflow/settings  覆盖全局模型设置（fail-closed 形状校验）
+ * - GET  /api/taskflow/models    宿主模型目录投影（下拉数据源；未注入提供方 → 501）
  *
  * @module dsh-taskflow/host
  */
 
 import type { IncomingHttpHeaders } from 'node:http'
 import { MAX_ACTION_BYTES } from '../protocol/types.ts'
+import type { ModelCatalog, ModelSettings } from '../protocol/types.ts'
 import type { TaskflowEngine } from './engine.ts'
+import { ModelSettingsError, validateModelSettings } from './settings.ts'
 
 export interface HttpResult {
   status: number
@@ -57,12 +62,15 @@ export function isTrustedRequest(
   return true
 }
 
-/** 处理一次（非 SSE）请求；SSE 由 plugin 层用 {@link createSseStream} 绑定。 */
+/** 处理一次（非 SSE）请求；SSE 由 plugin 层用 {@link createSseStream} 绑定。
+ *  `models`：宿主模型目录投影的提供方（dsh 适配器注入 ctx.llm 投影；demo 注入静态目录）。
+ *  未提供时 GET models 返回 501（客户端展示「目录不可用」，两槽仍可保存）。 */
 export async function handleTaskflowRequest(
   engine: TaskflowEngine,
   method: string,
   pathname: string,
   body: string | undefined,
+  opts: { models?: () => Promise<ModelCatalog> } = {},
 ): Promise<HttpResult> {
   if (method === 'GET' && pathname === '/api/taskflow/state') {
     const state = engine.getState()
@@ -80,6 +88,38 @@ export async function handleTaskflowRequest(
     }
     const result = await engine.dispatch(parsed)
     return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(result) }
+  }
+  if (method === 'GET' && pathname === '/api/taskflow/settings') {
+    const settings: ModelSettings = engine.getModelSettings()
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(settings) }
+  }
+  if (method === 'PUT' && pathname === '/api/taskflow/settings') {
+    if (body === undefined) return jsonError(400, 'request body required (JSON).')
+    const bytes = Buffer.byteLength(body, 'utf8')
+    if (bytes > MAX_ACTION_BYTES) return jsonError(413, `settings exceed ${MAX_ACTION_BYTES} bytes.`)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return jsonError(400, 'request body must be valid JSON.')
+    }
+    let settings: ModelSettings
+    try {
+      settings = validateModelSettings(parsed)
+    } catch (error) {
+      return jsonError(400, error instanceof ModelSettingsError ? error.message : 'invalid settings shape.')
+    }
+    engine.setModelSettings(settings)
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(engine.getModelSettings()) }
+  }
+  if (method === 'GET' && pathname === '/api/taskflow/models') {
+    if (opts.models === undefined) return jsonError(501, 'model catalog is unavailable in this deployment.')
+    try {
+      const catalog = await opts.models()
+      return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(catalog) }
+    } catch (error) {
+      return jsonError(502, `model catalog load failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
   return jsonError(404, `no taskflow route for ${method} ${pathname}`)
 }

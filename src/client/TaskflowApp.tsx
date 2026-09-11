@@ -4,22 +4,27 @@
  * @module dsh-taskflow/client
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { TaskflowTransport } from './api.ts'
 import {
   actorLabel,
   boardGroups,
   filterTasks,
   mergedTimeline,
+  modelForSession,
+  pendingApprovalCount,
+  pendingApprovalsOf,
   progressRatio,
   relativeTime,
   reviewBadgeCount,
   statusLabel,
   subtaskStatusLabel,
 } from './view.ts'
-import type { CardSummary, TimelineEntry } from './view.ts'
+import type { CardSummary, PendingApprovalView, TimelineEntry } from './view.ts'
+import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
+import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
 import type { DispatchResult, EngineState } from '../protocol/types.ts'
-import type { AcceptanceItem, Subtask, Task } from '../protocol/types.ts'
+import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
 type TabId = 'contract' | 'subtasks' | 'review' | 'history' | 'decompose'
 
@@ -36,14 +41,26 @@ function newRequestId(): string {
 }
 
 export function TaskflowApp({ transport, onClose }: { transport: TaskflowTransport; onClose?: () => void }): JSX.Element {
-  const [state, setState] = useState<EngineState | null>(null)
+  // 秒开：共享传输已有缓存（页面加载时通知栏拉过）就直接首屏渲染，再后台对账；
+  // 真正冷启动（首次打开且无任何缓存）才走骨架屏。
+  const [state, setState] = useState<EngineState | null>(() => transport.getCachedState())
   const [loadError, setLoadError] = useState<string | null>(null)
   const [sseUp, setSseUp] = useState(true)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'review' | 'blocked' | 'done'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const refreshSeq = useRef(0)
+  // 全局通知栏「去处理」→ 打开对应任务的抽屉并高亮审批卡（focus.ts 模块级存储）
+  const focus = useSyncExternalStore(subscribeBoardFocus, getBoardFocus)
+  useEffect(() => {
+    if (focus === null) return
+    setSelectedId(focus.taskId)
+    setFocusApprovalId(focus.approvalId ?? null)
+    clearBoardFocus()
+  }, [focus])
 
   const refresh = useCallback(async () => {
     refreshSeq.current += 1
@@ -78,6 +95,7 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const filtered = useMemo(() => filterTasks(tasks, { query, status: statusFilter }), [tasks, query, statusFilter])
   const groups = useMemo(() => boardGroups(filtered), [filtered])
   const reviewCount = reviewBadgeCount(tasks)
+  const approvalCount = pendingApprovalCount(tasks)
   const selected = tasks.find(t => t.id === selectedId) ?? null
 
   return (
@@ -119,6 +137,28 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           <i aria-hidden="true" />
           待验收 {reviewCount}
         </span>
+        {approvalCount > 0 && (
+          <span className="tf-badge tf-badge-approval" role="status" aria-label="待审批数量">
+            <i aria-hidden="true" />
+            待审批 {approvalCount}
+          </span>
+        )}
+        <span className="tf-settings-anchor">
+          <button
+            type="button"
+            className="tf-icon-btn"
+            aria-label="模型设置"
+            aria-expanded={settingsOpen}
+            title="模型设置"
+            onClick={() => setSettingsOpen(open => !open)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+            </svg>
+          </button>
+          {settingsOpen && <ModelSettingsPopover transport={transport} onClose={() => setSettingsOpen(false)} />}
+        </span>
         <button type="button" className="tf-btn tf-btn-primary" onClick={() => setCreateOpen(true)}>+ 新建任务</button>
         {onClose !== undefined && (
           <button type="button" className="tf-btn" onClick={onClose} aria-label="返回会话">✕ 返回会话</button>
@@ -156,9 +196,10 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
         />
       )}
       {selected !== null && (
-        <DetailDrawer
+        <DetailModal
           task={selected}
-          onClose={() => setSelectedId(null)}
+          focusApprovalId={focusApprovalId}
+          onClose={() => { setSelectedId(null); setFocusApprovalId(null) }}
           dispatch={dispatch}
           onRefresh={refresh}
         />
@@ -200,6 +241,7 @@ function TaskCard({ card, onOpen }: { card: CardSummary; onOpen: () => void }): 
         )}
         {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
         {running && <span className="tf-card-spinner" aria-hidden="true" />}
+        {card.awaitingHuman === 'approval' && <span className="tf-chip tf-chip-warn">待审批</span>}
         {card.awaitingHuman === 'permission' && <span className="tf-chip tf-chip-warn">执行需确认</span>}
         {card.awaitingHuman === 'review' && <span className="tf-chip tf-chip-warn">等验收</span>}
         {blocked && card.blockedReason !== undefined && (
@@ -252,8 +294,11 @@ function CreateDrawer({
   const [description, setDescription] = useState('')
   const [objective, setObjective] = useState('')
   const [acceptanceText, setAcceptanceText] = useState('')
-  const [permission, setPermission] = useState('read-only')
+  /** 执行模式（§7.1b）：默认完全权限（用户拍板 D1），映射为 pins 两轴组合。 */
+  const [mode, setMode] = useState<'auto' | 'approval'>('auto')
   const [autoStart, setAutoStart] = useState(true)
+  /** 迭代上限（留空 = 不限：任务一直跑到人工验收为止）。 */
+  const [maxRounds, setMaxRounds] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -265,13 +310,18 @@ function CreateDrawer({
       .map(line => line.trim())
       .filter(line => line.length > 0)
       .map(text => ({ text }))
+    const rounds = maxRounds.trim() === '' ? null : Math.min(99, Math.max(1, Number.parseInt(maxRounds, 10)))
     const result = await dispatch({
       type: 'createTask',
       title,
       description,
       acceptance: acceptance.length > 0 ? acceptance : undefined,
       ...(objective.trim().length > 0 ? { objective: objective.trim() } : {}),
-      pins: { permission },
+      ...(rounds === null ? {} : { maxRounds: rounds }),
+      pins: {
+        permission: mode === 'auto' ? 'workspace-write' : 'read-only',
+        executionMode: mode,
+      },
       autoStart,
     })
     setBusy(false)
@@ -299,13 +349,34 @@ function CreateDrawer({
           <textarea id="tf-ac" className="tf-textarea" value={acceptanceText} onChange={e => setAcceptanceText(e.target.value)} placeholder={'例如：\n全部测试通过\nREADME 更新使用说明'} />
         </div>
         <div className="tf-field">
-          <label htmlFor="tf-perm">执行权限</label>
-          <select id="tf-perm" className="tf-select" value={permission} onChange={e => setPermission(e.target.value)}>
-            <option value="read-only">read-only（默认）</option>
-            <option value="workspace-write">workspace-write</option>
-            <option value="danger-full-access">danger-full-access</option>
-          </select>
-          {permission !== 'read-only' && <span className="tf-hint">⚠️ 高于会话默认权限：首次执行前需在详情页确认。</span>}
+          <label>执行模式</label>
+          <div className="tf-mode-row" role="radiogroup" aria-label="执行模式">
+            <label className={`tf-mode-card${mode === 'auto' ? ' active' : ''}`}>
+              <input type="radio" name="tf-exec-mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />
+              <span className="tf-mode-title">🔓 完全权限</span>
+              <span className="tf-mode-desc">AI 自动执行，工具提权自动放行，全程不打扰</span>
+            </label>
+            <label className={`tf-mode-card${mode === 'approval' ? ' active' : ''}`}>
+              <input type="radio" name="tf-exec-mode" checked={mode === 'approval'} onChange={() => setMode('approval')} />
+              <span className="tf-mode-title">🔒 需要审批</span>
+              <span className="tf-mode-desc">只读执行；写操作逐次通知你裁决</span>
+            </label>
+          </div>
+          {mode === 'auto'
+            ? <span className="tf-hint">⚠️ 完全权限：AI 的提权请求（含高危操作）将自动放行、不再询问，请确认任务目标与工作区可信。</span>
+            : <span className="tf-hint">审批模式：提权请求会出现在全局通知栏，可在看板中「完全放行」或「拒绝」。</span>}
+        </div>
+        <div className="tf-field">
+          <label htmlFor="tf-max-rounds">迭代上限（可选，留空 = 不限）</label>
+          <input
+            id="tf-max-rounds"
+            className="tf-input"
+            inputMode="numeric"
+            placeholder="不限（默认：跑到你验收为止）"
+            value={maxRounds}
+            onChange={e => setMaxRounds(e.target.value.replace(/[^\d]/g, ''))}
+          />
+          <span className="tf-hint">打回迭代超过上限时任务会暂停等你裁决；留空则一直迭代，直到验收通过或你取消。</span>
         </div>
         <div className="tf-field">
           <label>
@@ -324,15 +395,59 @@ function CreateDrawer({
   )
 }
 
-// —— 详情抽屉（FR-11 五区）——
+// —— 详情弹窗（FR-11 五区；验收工作台容器）——
 
-function DetailDrawer({
+/**
+ * 弹窗无障碍（一次性装配）：初始焦点落在弹窗本体、Tab 焦点陷阱（循环不出
+ * 弹窗，遮罩后的看板不可达）、Esc 关闭、卸载时焦点还给打开者。
+ * onClose 走 ref，避免回调变化导致重跑 effect 抢焦点。
+ */
+function useDialogA11y(ref: React.RefObject<HTMLElement | null>, onClose: () => void): void {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  useEffect(() => {
+    const dialog = ref.current
+    if (dialog === null) return
+    const previous = document.activeElement as HTMLElement | null
+    const focusables = (): HTMLElement[] =>
+      Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ))
+    dialog.focus()
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.stopPropagation()
+        onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const list = focusables()
+      if (list.length === 0) return
+      const first = list[0]!
+      const last = list[list.length - 1]!
+      const active = document.activeElement
+      if (dialog.contains(active) === false || (event.shiftKey && active === first) || (!event.shiftKey && active === last)) {
+        event.preventDefault()
+        ;(event.shiftKey ? last : first).focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      previous?.focus()
+    }
+  }, [ref])
+}
+
+function DetailModal({
   task,
+  focusApprovalId,
   onClose,
   dispatch,
   onRefresh,
 }: {
   task: Task
+  focusApprovalId: string | null
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
   onRefresh: () => Promise<void>
@@ -340,6 +455,9 @@ function DetailDrawer({
   const [tab, setTab] = useState<TabId>(task.status === 'review' ? 'review' : 'contract')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dialogRef = useRef<HTMLElement>(null)
+  useDialogA11y(dialogRef, onClose)
+  const approvalPending = (task.approvals ?? []).some(a => a.status === 'pending')
 
   const act = async (action: Record<string, unknown>): Promise<void> => {
     setBusy(true)
@@ -351,15 +469,23 @@ function DetailDrawer({
   }
 
   return (
-    <div className="tf-overlay" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
-      <aside className="tf-drawer" role="dialog" aria-label={`任务详情 ${task.title}`}>
-        <header className="tf-drawer-head">
+    <div className="tf-overlay tf-overlay-center" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+      <aside
+        className="tf-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`任务详情 ${task.title}`}
+        ref={dialogRef}
+        tabIndex={-1}
+      >
+        <header className="tf-modal-head">
           <span className="tf-status-tag" data-status={task.status}>
             <i aria-hidden="true" />
             {statusLabel(task.status)}
           </span>
-          <span className="tf-drawer-title" title={task.title}>{task.title}</span>
+          <span className="tf-modal-title" title={task.title}>{task.title}</span>
           {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
+          {approvalPending && <span className="tf-chip tf-chip-warn">待审批</span>}
           <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
         </header>
         <nav className="tf-tabs" role="tablist">
@@ -377,16 +503,92 @@ function DetailDrawer({
             </button>
           ))}
         </nav>
-        <div className="tf-drawer-body">
+        {/* 验收 tab 是填充式工作台（内部自带滚动与吸底操作），其余 tab 走普通滚动 */}
+        <div className={tab === 'review' ? 'tf-modal-body tf-modal-body-fill' : 'tf-modal-body'}>
           {error !== null && <div className="tf-banner" role="alert">{error}</div>}
+          <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
           {tab === 'contract' && <ContractTab task={task} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} />}
           {tab === 'history' && <HistoryTab task={task} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
-          <TaskActions task={task} busy={busy} act={act} />
         </div>
+        <footer className="tf-modal-foot">
+          <TaskActions task={task} busy={busy} act={act} />
+        </footer>
       </aside>
+    </div>
+  )
+}
+
+// —— 权限审批区（§7.1b：两档裁决 = 完全放行 / 拒绝）——
+
+function ApprovalSection({
+  task,
+  busy,
+  act,
+  focusApprovalId,
+}: {
+  task: Task
+  busy: boolean
+  act: (action: Record<string, unknown>) => Promise<void>
+  focusApprovalId: string | null
+}): JSX.Element | null {
+  const [note, setNote] = useState('')
+  const pending: PendingApprovalView[] = pendingApprovalsOf(task)
+  if (pending.length === 0) return null
+  return (
+    <div className="tf-section tf-approvals" role="region" aria-label="权限审批">
+      <span className="tf-section-title">权限审批（{pending.length} 条待裁决）</span>
+      {pending.map(approval => (
+        <div
+          className={`tf-approval${focusApprovalId === approval.id ? ' tf-approval-focus' : ''}`}
+          key={approval.id}
+          data-approval-id={approval.id}
+        >
+          <div className="tf-item-head">
+            <span className="tf-chip tf-chip-warn">{approval.toolName}</span>
+            <span className="tf-item-title">「{approval.subtaskTitle}」请求提权</span>
+            <span className="tf-time">{relativeTime(approval.createdAt)}</span>
+          </div>
+          {approval.reason !== undefined && <span className="tf-approval-reason">{approval.reason}</span>}
+          <div className="tf-actions">
+            <button
+              type="button"
+              className="tf-btn tf-btn-primary"
+              disabled={busy}
+              title="会话权限原地提升，后续不再逐次审批"
+              onClick={() => void act({ type: 'decideApproval', approvalId: approval.id, decision: 'allow' })}
+            >
+              ✅ 完全放行（本会话）
+            </button>
+            <button
+              type="button"
+              className="tf-btn tf-btn-danger"
+              disabled={busy}
+              title="仅拒绝这一次调用，AI 可调整方案"
+              onClick={() => void act({
+                type: 'decideApproval',
+                approvalId: approval.id,
+                decision: 'reject',
+                ...(note.trim().length > 0 ? { note } : {}),
+              })}
+            >
+              ✕ 拒绝
+            </button>
+          </div>
+        </div>
+      ))}
+      <div className="tf-field">
+        <label htmlFor="tf-approval-note">批语（可选，随裁决留痕）</label>
+        <input
+          id="tf-approval-note"
+          className="tf-input"
+          value={note}
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：只允许写 reports/ 目录"
+        />
+      </div>
     </div>
   )
 }
@@ -402,52 +604,51 @@ function TaskActions({
 }): JSX.Element {
   const [confirming, setConfirming] = useState<'cancel' | null>(null)
   return (
-    <div className="tf-section">
-      <span className="tf-section-title">操作</span>
-      <div className="tf-actions">
-        {task.status === 'draft' && (
-          <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startDecompose' })}>开始拆解</button>
-        )}
-        {task.status === 'blocked' && task.subtasks.length === 0 && (
-          <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startDecompose' })}>重新拆解</button>
-        )}
-        {task.status === 'ready' && (
-          <button
-            type="button"
-            className="tf-btn tf-btn-primary"
-            disabled={busy}
-            onClick={() => void act({ type: 'startImplementation', ...(task.permissionConfirmed ? {} : { confirmPermission: true }) })}
-          >
-            开始实现{task.permissionConfirmed ? '' : '（确认执行权限）'}
-          </button>
-        )}
-        {task.status === 'in-progress' && !task.permissionConfirmed && (
-          <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startImplementation', confirmPermission: true })}>
-            确认执行权限并继续
-          </button>
-        )}
-        {task.status === 'blocked' && task.subtasks.some(s => s.status === 'blocked') && (
-          <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'retryBlocked' })}>重试受阻项</button>
-        )}
-        {task.status === 'blocked' && (
-          <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'raiseMaxRounds', maxRounds: (task.maxRounds ?? 3) + 2 })}>
-            提高迭代上限至 {(task.maxRounds ?? 3) + 2}
-          </button>
-        )}
-        {(task.status === 'done' || task.status === 'cancelled') && (
-          <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'archiveTask' })}>归档</button>
-        )}
-        {!['done', 'cancelled', 'archived'].includes(task.status) && (
-          confirming === 'cancel' ? (
-            <>
-              <button type="button" className="tf-btn tf-btn-danger" disabled={busy} onClick={() => { setConfirming(null); void act({ type: 'cancelTask', confirm: true }) }}>确认取消（终态）</button>
-              <button type="button" className="tf-btn" onClick={() => setConfirming(null)}>再想想</button>
-            </>
-          ) : (
-            <button type="button" className="tf-btn tf-btn-danger" disabled={busy} onClick={() => setConfirming('cancel')}>取消任务…</button>
-          )
-        )}
-      </div>
+    <div className="tf-actions">
+      {task.status === 'draft' && (
+        <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startDecompose' })}>开始拆解</button>
+      )}
+      {task.status === 'blocked' && task.subtasks.length === 0 && (
+        <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startDecompose' })}>重新拆解</button>
+      )}
+      {task.status === 'ready' && (
+        <button
+          type="button"
+          className="tf-btn tf-btn-primary"
+          disabled={busy}
+          onClick={() => void act({ type: 'startImplementation', ...(task.permissionConfirmed ? {} : { confirmPermission: true }) })}
+        >
+          开始实现{task.permissionConfirmed ? '' : '（确认执行权限）'}
+        </button>
+      )}
+      {task.status === 'in-progress' && !task.permissionConfirmed && (
+        <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startImplementation', confirmPermission: true })}>
+          确认执行权限并继续
+        </button>
+      )}
+      {task.status === 'blocked' && task.subtasks.some(s => s.status === 'blocked') && (
+        <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'retryBlocked' })}>重试受阻项</button>
+      )}
+      {/* 仅当 block 的真正原因是「打回迭代达上限」时才提供提上限入口；
+          拆解失败/重试耗尽等其他 blocked 原因不归它管（避免误导人中途提上限） */}
+      {task.status === 'blocked' && task.maxRounds !== null && task.round >= task.maxRounds && (
+        <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'raiseMaxRounds', maxRounds: task.maxRounds! + 2 })}>
+          提高迭代上限至 {task.maxRounds + 2}
+        </button>
+      )}
+      {(task.status === 'done' || task.status === 'cancelled') && (
+        <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'archiveTask' })}>归档</button>
+      )}
+      {!['done', 'cancelled', 'archived'].includes(task.status) && (
+        confirming === 'cancel' ? (
+          <>
+            <button type="button" className="tf-btn tf-btn-danger" disabled={busy} onClick={() => { setConfirming(null); void act({ type: 'cancelTask', confirm: true }) }}>确认取消（终态）</button>
+            <button type="button" className="tf-btn" onClick={() => setConfirming(null)}>再想想</button>
+          </>
+        ) : (
+          <button type="button" className="tf-btn tf-btn-danger" disabled={busy} onClick={() => setConfirming('cancel')}>取消任务…</button>
+        )
+      )}
     </div>
   )
 }
@@ -470,7 +671,7 @@ function ContractTab({ task }: { task: Task }): JSX.Element {
           <dt>权限</dt>
           <dd>
             {task.contract.pins.permission}
-            {!task.permissionConfirmed && task.contract.pins.permission !== 'read-only' && ' · 需确认'}
+            {!task.permissionConfirmed && ' · 需确认'}
           </dd>
         </dl>
       </div>
@@ -542,7 +743,35 @@ function SubtaskItem({ sub }: { sub: Subtask }): JSX.Element {
   )
 }
 
-// —— 验收页（FR-07 / §4.6）——
+// —— 验收工作台（FR-07 / §4.6，2026-09-11 语义：验收只对合同，过程归 AI）——
+
+/** 验收标准 × 证据自检 的通过统计（任务级与子任务级共用）。 */
+function checkStatsOf(acceptance: AcceptanceItem[], evidence: Evidence | undefined): { passed: number; total: number } {
+  if (evidence === undefined) return { passed: 0, total: 0 }
+  const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
+  const total = acceptance.length
+  const passed = acceptance.filter(item => checkById.get(item.id)?.verdict === 'pass').length
+  return { passed, total }
+}
+
+/** 子任务维度的便捷包装。 */
+function checkStats(sub: Subtask): { passed: number; total: number } {
+  return checkStatsOf(sub.acceptance, sub.evidence)
+}
+
+/** 自检徽章语义色：全过=绿、全挂=红、部分=橙。 */
+function checkBadgeClass(passed: number, total: number): string {
+  if (total === 0) return 'mid'
+  return passed === total ? 'ok' : passed === 0 ? 'bad' : 'mid'
+}
+
+function CheckBadge({ passed, total, mini }: { passed: number; total: number; mini?: boolean }): JSX.Element {
+  return (
+    <span className={`tf-checkbadge ${mini ? 'mini ' : ''}${checkBadgeClass(passed, total)}`}>
+      自检 {passed}/{total}
+    </span>
+  )
+}
 
 function ReviewTab({
   task,
@@ -554,129 +783,305 @@ function ReviewTab({
   act: (action: Record<string, unknown>) => Promise<void>
 }): JSX.Element {
   const [comment, setComment] = useState('')
+  const [procOpen, setProcOpen] = useState(false)
+  const [openSubId, setOpenSubId] = useState<string | null>(null)
   const inReview = task.subtasks.filter(s => s.status === 'review')
   const canReject = inReview.length > 0
   const atLimit = task.maxRounds !== null && task.round + 1 > task.maxRounds
+  const acceptance = task.contract.acceptance
+  const taskEvidence = task.evidence
+  const taskStats = checkStatsOf(acceptance, taskEvidence)
+  const finalizing = task.finalizeSessionId !== undefined
+  const triaging = task.triageSessionId !== undefined
+  const taskCheckById = taskEvidence === undefined
+    ? null
+    : new Map(taskEvidence.selfCheck.map(check => [check.acceptanceId, check]))
 
   return (
-    <>
-      <div className="tf-section">
-        <span className="tf-section-title">完成证明（证据报告卡）</span>
-        {task.subtasks.filter(s => s.evidence !== undefined).length === 0 && (
-          <span className="tf-hint">暂无证据。子任务完成时由执行会话提交。</span>
-        )}
-        <div className="tf-list">
-          {task.subtasks.filter(s => s.evidence !== undefined).map(sub => (
-            <EvidenceCard key={sub.id} sub={sub} />
-          ))}
-        </div>
-      </div>
-      <div className="tf-section">
-        <span className="tf-section-title">验收操作</span>
-        {task.status === 'review' ? (
-          <>
-            <div className="tf-actions">
-              <button
-                type="button"
-                className="tf-btn tf-btn-primary"
-                disabled={busy}
-                onClick={() => void act({ type: 'approveTask' })}
-              >
-                批准 · 全部通过（→ done）
-              </button>
-            </div>
-            <div className="tf-field">
-              <label htmlFor="tf-comment">打回批语（必填，将原文注入下一轮执行）</label>
-              <textarea
-                id="tf-comment"
-                className="tf-textarea"
-                value={comment}
-                onChange={event => setComment(event.target.value)}
-                placeholder="说清哪里不满足验收标准、期望的修正方向"
-              />
-            </div>
-            <div className="tf-actions">
-              {atLimit ? (
-                <>
-                  <span className="tf-chip tf-chip-warn">已达迭代上限（{task.round}/{task.maxRounds}）</span>
-                  <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'raiseMaxRounds', maxRounds: (task.maxRounds ?? 3) + 2 })}>提高上限并打回</button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="tf-btn tf-btn-danger"
-                  disabled={busy || !canReject || comment.trim().length === 0}
-                  onClick={() => void act({ type: 'rejectSubtask', comment })}
-                >
-                  打回并继续迭代{canReject ? `（默认选中 ${inReview.length} 个子任务）` : '（无可打回子任务）'}
-                </button>
-              )}
-            </div>
-          </>
-        ) : task.status === 'in-progress' && inReview.length > 0 ? (
-          <>
-            <span className="tf-hint">部分子任务已提交证据，可先逐个批准或打回（其余仍在执行）。</span>
-            <div className="tf-list">
-              {inReview.map(sub => (
-                <div className="tf-actions" key={sub.id}>
-                  <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'approveSubtask', subtaskId: sub.id })}>批准「{sub.title}」</button>
+    <div className="tf-review">
+      <div className="tf-review-scroll">
+        {/* —— 任务级验收（人的判定面：只对合同，不对子任务）—— */}
+        <section className="tf-section">
+          <div className="tf-task-head">
+            <span className="tf-section-title">任务验收（对照任务合同）</span>
+            {taskEvidence !== undefined && taskStats.total > 0 && (
+              <CheckBadge passed={taskStats.passed} total={taskStats.total} />
+            )}
+          </div>
+          {taskEvidence !== undefined ? (
+            <EvidenceView
+              title="任务级终检（整体交付对照合同）"
+              acceptance={acceptance}
+              evidence={taskEvidence}
+              headExtra={<span className="tf-chip tf-chip-mono">AI 终检</span>}
+            />
+          ) : finalizing ? (
+            <span className="tf-hint">AI 终检中：正在对照任务级验收标准核验整体交付；完成后进入人工终批——你不需要逐个看子任务。</span>
+          ) : task.status === 'review' && acceptance.length > 0 ? (
+            <span className="tf-hint">
+              本任务暂无任务级终检证据（存量任务）。子任务证据可作为验收材料，或
+              <button type="button" className="tf-link-btn" disabled={busy} onClick={() => void act({ type: 'generateTaskEvidence' })}>补跑 AI 终检</button>
+            </span>
+          ) : (
+            <span className="tf-hint">子任务执行中；全部完成后 AI 会先对照任务级验收标准做终检，再交给你终批。</span>
+          )}
+          {triaging && <span className="tf-hint">AI 正在根据批语定位需返工的子任务（其余子任务不会重跑）…</span>}
+          <div className="tf-section">
+            <span className="tf-section-title">任务级验收标准（{acceptance.length}）</span>
+            {acceptance.length === 0 && <span className="tf-hint">（空 —— AI 拆解时会补全建议稿）</span>}
+            {acceptance.map(item => {
+              const check = taskCheckById?.get(item.id)
+              const verdict = taskEvidence === undefined ? undefined : (check?.verdict ?? 'fail')
+              return (
+                <div className="tf-ev-check" key={item.id}>
+                  {verdict !== undefined && (
+                    <span className={`tf-verdict tf-verdict-${verdict}`}>{check?.verdict ?? '缺失'}</span>
+                  )}
+                  <span className="tf-ev-check-body">
+                    <span className="tf-ev-check-ac">{item.text}</span>
+                    {check?.note !== undefined && <span className="tf-ev-check-note">{check.note}</span>}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
+        {/* —— 执行过程举证（AI 的过程留痕，非验收判定面）—— */}
+        <section className="tf-section">
+          <button type="button" className="tf-ev-sechead" aria-expanded={procOpen} onClick={() => setProcOpen(open => !open)}>
+            <span className={`tf-ev-caret${procOpen ? ' open' : ''}`} aria-hidden="true">▶</span>
+            <span className="tf-section-title">执行过程举证（{task.subtasks.length}）</span>
+            <span className="tf-hint">AI 执行留痕，无需逐个验收；点开可查每个子任务的证据</span>
+          </button>
+          {procOpen && (
+            <div className="tf-proc">
+              {task.subtasks.map(sub => (
+                <div className="tf-proc-item" key={sub.id}>
+                  <button
+                    type="button"
+                    className="tf-proc-row"
+                    aria-expanded={openSubId === sub.id}
+                    onClick={() => setOpenSubId(id => (id === sub.id ? null : sub.id))}
+                  >
+                    <span className={`tf-ev-caret${openSubId === sub.id ? ' open' : ''}`} aria-hidden="true">▶</span>
+                    <StatusDot status={sub.status} />
+                    <span className="tf-proc-title">{sub.title}</span>
+                    {sub.evidence !== undefined && sub.acceptance.length > 0 && (
+                      <ProcBadge sub={sub} />
+                    )}
+                  </button>
+                  {openSubId === sub.id && (sub.evidence !== undefined
+                    ? <EvidenceDetail key={sub.id} sub={sub} />
+                    : <NoEvidencePanel sub={sub} />)}
                 </div>
               ))}
             </div>
-            <div className="tf-field">
-              <label htmlFor="tf-comment2">打回批语（必填）</label>
-              <textarea id="tf-comment2" className="tf-textarea" value={comment} onChange={event => setComment(event.target.value)} />
-            </div>
-            <div className="tf-actions">
-              <button type="button" className="tf-btn tf-btn-danger" disabled={busy || comment.trim().length === 0} onClick={() => void act({ type: 'rejectSubtask', comment })}>打回已举证子任务</button>
-            </div>
-          </>
+          )}
+        </section>
+      </div>
+      <footer className="tf-review-foot">
+        {task.status === 'review' ? (
+          <button
+            type="button"
+            className="tf-btn tf-btn-primary"
+            disabled={busy}
+            onClick={() => void act({ type: 'approveTask' })}
+          >
+            ✓ 验收通过（→ done）
+          </button>
+        ) : task.status === 'in-progress' && (inReview.length > 0 || triaging) ? (
+          <span className="tf-hint">执行中：打回批语将由 AI 定位返工范围，无需选择子任务。</span>
         ) : (
           <span className="tf-hint">当前状态 {statusLabel(task.status)}，无待验收操作。</span>
         )}
-      </div>
-    </>
+        {(task.status === 'review' || (task.status === 'in-progress' && inReview.length > 0)) && (
+          <>
+            <textarea
+              className="tf-textarea"
+              aria-label="打回批语（必填，将原文注入下一轮执行）"
+              placeholder="打回时必填：说清哪里不满足验收标准；AI 会据此定位需返工的子任务"
+              value={comment}
+              onChange={event => setComment(event.target.value)}
+            />
+            {atLimit ? (
+              <>
+                <span className="tf-chip tf-chip-warn">已达迭代上限（{task.round}/{task.maxRounds}）</span>
+                <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'raiseMaxRounds', maxRounds: (task.maxRounds ?? 3) + 2 })}>提高上限并打回</button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="tf-btn tf-btn-danger"
+                disabled={busy || !canReject || comment.trim().length === 0}
+                onClick={() => void act({ type: 'rejectSubtask', comment })}
+              >
+                ✗ 打回并继续迭代
+              </button>
+            )}
+          </>
+        )}
+      </footer>
+    </div>
   )
 }
 
-function EvidenceCard({ sub }: { sub: Subtask }): JSX.Element {
-  const evidence = sub.evidence
-  if (evidence === undefined) return <></>
-  const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
+/** 过程清单行的小徽章（自检通过率）。 */
+function ProcBadge({ sub }: { sub: Subtask }): JSX.Element {
+  const stats = checkStats(sub)
+  return <CheckBadge passed={stats.passed} total={stats.total} mini />
+}
+
+/** 未举证子任务的详情占位：给足上下文（说明 + 子任务验收标准），点开任何一行都有内容。 */
+function NoEvidencePanel({ sub }: { sub: Subtask }): JSX.Element {
   return (
     <div className="tf-item">
       <div className="tf-item-head">
+        <StatusDot status={sub.status} />
         <span className="tf-item-title">{sub.title}</span>
-        <span className="tf-chip">第 {sub.round} 轮证据</span>
+        <span className="tf-chip">{subtaskStatusLabel(sub.status)}</span>
+        {sub.round > 1 && <span className="tf-chip">第 {sub.round} 轮</span>}
       </div>
-      <span className="tf-evidence-label">变更摘要：{evidence.changesSummary}</span>
-      {evidence.refs.diffSummary !== undefined && (
-        <span className="tf-evidence-diff">{evidence.refs.diffSummary}</span>
-      )}
-      {evidence.verification.map((record, index) => (
-        <div key={index}>
-          <div className="tf-item-head">
-            <span className={`tf-verdict tf-verdict-${record.passed ? 'pass' : 'fail'}`}>{record.passed ? '通过' : '失败'}</span>
-            <span className="tf-ac-id">{record.label}</span>
+      {sub.detail.trim().length > 0 && <span className="tf-hint">{sub.detail}</span>}
+      <div className="tf-section">
+        <span className="tf-section-title">子任务验收标准</span>
+        {sub.acceptance.map(item => (
+          <div className="tf-ac" key={item.id}>
+            <span className="tf-ac-id">{item.id}</span>
+            <span>{item.text}</span>
           </div>
-          <pre className="tf-verify">{record.output}</pre>
+        ))}
+      </div>
+      <span className="tf-hint">该子任务尚未提交证据；执行会话完成时提交，通过三要素校验后出现在这里。</span>
+    </div>
+  )
+}
+
+/**
+ * 证据视图（分层：判定先行 → 自检前置 → 摘要限高 → 验证折叠）。
+ * 任务级终检卡与子任务证据卡共用；key 挂在调用方：切换对象时折叠状态整体重置。
+ */
+function EvidenceView({
+  title,
+  acceptance,
+  evidence,
+  round,
+  status,
+  headExtra,
+}: {
+  title: string
+  acceptance: AcceptanceItem[]
+  evidence: Evidence
+  round?: number
+  status?: Subtask['status'] | Task['status']
+  headExtra?: JSX.Element
+}): JSX.Element {
+  const stats = checkStatsOf(acceptance, evidence)
+  const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
+  const hasFailedChecks = stats.total === 0 || stats.passed < stats.total
+  // hooks 必须先于条件返回；evidence 缺失时折叠态按「无失败」初始化即可
+  const [checksOpen, setChecksOpen] = useState(hasFailedChecks)
+  const summaryLong = evidence.changesSummary.length > 160
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [openVerify, setOpenVerify] = useState<Record<number, boolean>>({})
+
+  return (
+    <article className="tf-ev">
+      <div className="tf-ev-head">
+        {status !== undefined && <StatusDot status={status} />}
+        <span className="tf-ev-title">{title}</span>
+        {headExtra}
+        {stats.total > 0 && <CheckBadge passed={stats.passed} total={stats.total} />}
+        {round !== undefined && round > 1 && <span className="tf-chip">第 {round} 轮证据</span>}
+      </div>
+
+      <section className="tf-ev-section">
+        <button type="button" className="tf-ev-sechead" aria-expanded={checksOpen} onClick={() => setChecksOpen(open => !open)}>
+          <span className={`tf-ev-caret${checksOpen ? ' open' : ''}`} aria-hidden="true">▶</span>
+          <span className="tf-section-title">逐条自检（对照验收标准）</span>
+          {hasFailedChecks
+            ? <span className="tf-verdict tf-verdict-fail">{stats.passed}/{stats.total} 通过</span>
+            : <span className="tf-verdict tf-verdict-pass">全部通过</span>}
+        </button>
+        {checksOpen && (
+          <div className="tf-evidence-checks">
+            {acceptance.map(item => {
+              const check = checkById.get(item.id)
+              const verdict = check?.verdict ?? 'fail'
+              return (
+                <div className="tf-ev-check" key={item.id}>
+                  <span className={`tf-verdict tf-verdict-${verdict}`}>{check?.verdict ?? '缺失'}</span>
+                  <span className="tf-ev-check-body">
+                    <span className="tf-ev-check-ac">{item.text}</span>
+                    <span className="tf-ev-check-note">{check?.note ?? '（缺自检条目）'}</span>
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="tf-ev-section">
+        <div className="tf-ev-sechead">
+          <span className="tf-section-title">变更摘要</span>
+          {summaryLong && (
+            <button type="button" className="tf-link-btn" onClick={() => setSummaryOpen(open => !open)}>
+              {summaryOpen ? '收起' : '展开全文'}
+            </button>
+          )}
         </div>
-      ))}
-      <span className="tf-section-title">逐条自检（对照验收标准）</span>
-      <div className="tf-evidence-checks">
-        {sub.acceptance.map(item => {
-          const check = checkById.get(item.id)
+        <span className={summaryOpen ? 'tf-ev-summary' : 'tf-ev-summary tf-clamp'}>{evidence.changesSummary}</span>
+        {evidence.refs.diffSummary !== undefined && (
+          <span className="tf-evidence-diff">{evidence.refs.diffSummary}</span>
+        )}
+      </section>
+
+      <section className="tf-ev-section">
+        <span className="tf-section-title">验证记录（{evidence.verification.length}）</span>
+        {evidence.verification.map((record, index) => {
+          const open = openVerify[index] ?? !record.passed
           return (
-            <div className="tf-ac" key={item.id}>
-              <span className="tf-ac-id">{item.id}</span>
-              <span className={`tf-verdict tf-verdict-${check?.verdict ?? 'partial'}`}>{check?.verdict === 'pass' ? 'pass' : check?.verdict === 'partial' ? 'partial' : 'fail'}</span>
-              <span>{check?.note ?? '（缺自检条目）'}</span>
+            <div className="tf-ev-verify" key={index}>
+              <button
+                type="button"
+                className="tf-ev-sechead"
+                aria-expanded={open}
+                onClick={() => setOpenVerify(map => ({ ...map, [index]: !open }))}
+              >
+                <span className={`tf-ev-caret${open ? ' open' : ''}`} aria-hidden="true">▶</span>
+                <span className={`tf-verdict tf-verdict-${record.passed ? 'pass' : 'fail'}`}>{record.passed ? '通过' : '失败'}</span>
+                <span className="tf-ev-verify-label">{record.label}</span>
+              </button>
+              {open && <pre className="tf-verify">{record.output}</pre>}
             </div>
           )
         })}
-      </div>
-      <span className="tf-hint">产出会话：{evidence.refs.sessionId}</span>
-    </div>
+      </section>
+    </article>
+  )
+}
+
+/** 子任务证据卡 = EvidenceView + 会话/模型留痕。 */
+function EvidenceDetail({ sub }: { sub: Subtask }): JSX.Element {
+  const evidence = sub.evidence
+  if (evidence === undefined) return <></>
+  return (
+    <>
+      <EvidenceView
+        title={sub.title}
+        acceptance={sub.acceptance}
+        evidence={evidence}
+        round={sub.round}
+        status={sub.status}
+      />
+      <span className="tf-hint">
+        产出会话：{evidence.refs.sessionId}
+        {modelForSession(sub, evidence.refs.sessionId) !== undefined && (
+          <> · 模型 <span className="tf-chip tf-chip-mono">{modelForSession(sub, evidence.refs.sessionId)}</span></>
+        )}
+      </span>
+    </>
   )
 }
 
@@ -707,6 +1112,7 @@ function TimelineRow({ entry }: { entry: TimelineEntry }): JSX.Element {
         <div className="tf-tl-label">
           <span className="tf-tl-actor">{actorLabel(entry.actor)}</span>
           <span style={{ fontWeight: entry.isTransition ? 600 : 400 }}>{entry.label}</span>
+          {entry.model !== undefined && <span className="tf-chip tf-chip-mono" title="会话模型">{entry.model}</span>}
         </div>
         {entry.detail !== undefined && <div className={`tf-tl-detail${isReject ? ' tf-tl-reject' : ''}`}>{entry.detail}</div>}
       </div>

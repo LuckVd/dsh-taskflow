@@ -189,3 +189,24 @@ describe('Evidence 三要素校验（§4.5/§7.4 不变量 3）', () => {
     }
   })
 })
+
+describe('decideApproval 与 pins.executionMode 校验（§7.1b）', () => {
+  const base = { type: 'decideApproval', requestId: 'da-1', taskId: 'tf_1', approvalId: 'ap_1' }
+
+  it('接受合法 allow/reject，note 可选', () => {
+    expect(() => validateActionShape({ ...base, decision: 'allow' })).not.toThrow()
+    expect(() => validateActionShape({ ...base, decision: 'reject', note: '只允许读' })).not.toThrow()
+    const action = validateActionShape({ ...base, decision: 'reject' })
+    expect(action).toMatchObject({ type: 'decideApproval', decision: 'reject' })
+  })
+
+  it('decision 非法值与缺失 approvalId 拒绝', () => {
+    expect(() => validateActionShape({ ...base, decision: 'allow-all' })).toThrow(ActionFormatError)
+    expect(() => validateActionShape({ type: 'decideApproval', requestId: 'da-2', taskId: 'tf_1', decision: 'allow' })).toThrow(/approvalId/)
+  })
+
+  it('createTask/updateContract 的 pins 接受 executionMode', () => {
+    expect(() => validateActionShape({ type: 'createTask', requestId: 'r2', title: 't', description: 'd', pins: { executionMode: 'approval' } })).not.toThrow()
+    expect(() => validateActionShape({ type: 'createTask', requestId: 'r3', title: 't', description: 'd', pins: { executionMode: 'sudo' } })).toThrow(/executionMode/)
+  })
+})

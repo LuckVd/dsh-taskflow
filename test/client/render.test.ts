@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DEFAULT_ENGINE_CONFIG, TaskflowEngine } from '../../src/host/engine.ts'
 import type { DispatchResult } from '../../src/host/engine.ts'
 import { LedgerStore } from '../../src/host/ledger.ts'
-import { MockSessionAdapter } from '../../src/host/mock/session-adapter.ts'
+import { MockSessionAdapter, buildPassingEvidence } from '../../src/host/mock/session-adapter.ts'
 import { handleTaskflowRequest } from '../../src/host/http.ts'
 import { cleanup, tempDir, waitFor } from '../helpers.ts'
 
@@ -20,13 +20,14 @@ const bundlePath = path.join(here, '../../dist/client.demo.js')
 describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 真实引擎）', () => {
   let dom: JSDOM
   let engine: TaskflowEngine
+  let adapter: MockSessionAdapter
   let dir: string
   let unmount: (() => void) | undefined
 
   beforeAll(async () => {
     dir = await tempDir('taskflow-ui-')
     const box: { engine?: TaskflowEngine } = {}
-    const adapter = new MockSessionAdapter({ getLedger: () => box.engine!.getState().ledger })
+    adapter = new MockSessionAdapter({ getLedger: () => box.engine!.getState().ledger })
     engine = new TaskflowEngine(new LedgerStore(path.join(dir, 'ledger.json')), adapter, DEFAULT_ENGINE_CONFIG)
     box.engine = engine
     await engine.boot()
@@ -78,10 +79,30 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     window.eval(readFileSync(bundlePath, 'utf8') + ';window.__taskflowDemo = __taskflowDemo;')
     const api = (window as unknown as { __taskflowDemo: { mountTaskflow(root: HTMLElement, transport: unknown): () => void } }).__taskflowDemo
     expect(api).toBeTruthy()
+    // 设置/模型目录走真实 HTTP 处理器（与浏览器 fetch shim 同一条路径）
+    const callApi = async (method: string, pathname: string, body?: string): Promise<{ status: number; json: any }> => {
+      const result = await handleTaskflowRequest(engine, method, pathname, body)
+      return { status: result.status, json: JSON.parse(result.body) }
+    }
     unmount = api.mountTaskflow(window.document.getElementById('root')!, {
+      // F4 秒开接口：测试无预热缓存，返回 null 走骨架屏 → refresh 正常对账
+      getCachedState: () => null,
       getState: () => engine.getState(),
       dispatch: (action: unknown) => engine.dispatch(action) as Promise<DispatchResult>,
       subscribe: (onChange: () => void) => engine.subscribe(onChange),
+      getSettings: async () => (await callApi('GET', '/api/taskflow/settings')).json,
+      saveSettings: async (next: unknown) => {
+        const response = await callApi('PUT', '/api/taskflow/settings', JSON.stringify(next))
+        if (response.status >= 400) throw new Error(`settings ${response.status}`)
+        return response.json
+      },
+      getModels: async () => ({
+        default: { provider: 'deepseek', model: 'deepseek-chat' },
+        groups: [
+          { id: 'deepseek', name: 'DeepSeek', models: [{ id: 'deepseek-chat', name: 'deepseek-chat' }] },
+          { id: 'ollama', name: 'Ollama（本机）', models: [{ id: 'qwen3:8b', name: 'qwen3:8b' }] },
+        ],
+      }),
     })
   })
 
@@ -103,10 +124,11 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(doc.querySelector('[aria-label="搜索任务"]')).toBeTruthy()
   })
 
-  it('详情抽屉：五区标签 + 合同 + 子任务 + 证据报告卡', async () => {
+  it('详情弹窗：五区标签 + 合同 + 子任务 + 证据报告卡', async () => {
     const doc = dom.window.document
     ;(doc.querySelector('.tf-card') as HTMLElement).click()
-    await waitFor(() => doc.querySelector('.tf-drawer') !== null)
+    await waitFor(() => doc.querySelector('.tf-modal') !== null)
+    expect(doc.querySelector('.tf-modal[aria-modal="true"]')).toBeTruthy()
     const tabs = [...doc.querySelectorAll('.tf-tab')].map(el => el.textContent)
     expect(tabs.join(',')).toContain('合同')
     expect(tabs.join(',')).toContain('子任务')
@@ -117,14 +139,30 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     // 子任务标签
     ;(doc.querySelector('.tf-tab:nth-child(2)') as HTMLElement).click()
     await waitFor(() => doc.querySelectorAll('.tf-item').length >= 2)
-    // 验收标签：证据三要素 + 逐条对照
+    // 验收标签（2026-09-11 语义）：任务级判定面优先 + 子任务降级为过程举证折叠附录
     ;(doc.querySelector('.tf-tab:nth-child(3)') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-task-head') !== null)
+    expect(doc.querySelector('.tf-task-head')!.textContent).toContain('任务验收')
+    // 任务级终检证据卡（引擎自动产出）在前，验证记录默认折叠 → 点行头展开看输出
+    await waitFor(() => doc.querySelector('.tf-ev') !== null)
+    expect(doc.querySelector('.tf-checkbadge')!.textContent).toContain('自检')
+    const verifyHead = doc.querySelector('.tf-ev-verify .tf-ev-sechead') as HTMLElement
+    expect(verifyHead).toBeTruthy()
+    verifyHead.click()
     await waitFor(() => doc.querySelector('.tf-verify') !== null)
-    expect(doc.querySelector('.tf-drawer-body')!.textContent).toContain('变更摘要')
-    expect(doc.querySelector('.tf-drawer-body')!.textContent).toContain('逐条自检')
+    expect(doc.querySelector('.tf-modal-body')!.textContent).toContain('变更摘要')
+    expect(doc.querySelector('.tf-modal-body')!.textContent).toContain('逐条自检')
     expect(doc.querySelectorAll('.tf-verdict').length).toBeGreaterThan(0)
-    // 批准按钮（任务级）
-    const approve = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批准'))
+    // 过程举证默认折叠：点开区头 → 手风琴行出现 → 点行展开子任务证据
+    expect(doc.querySelector('.tf-proc')).toBeNull()
+    const procHead = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('执行过程举证'))
+    expect(procHead).toBeTruthy()
+    ;(procHead as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-proc-row') !== null)
+    ;(doc.querySelector('.tf-proc-row') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-proc-item .tf-ev') !== null)
+    // 任务级批准按钮（吸底操作栏）
+    const approve = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('验收通过'))
     expect(approve).toBeTruthy()
   })
 
@@ -162,5 +200,102 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     const submit = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('创建'))
     expect((submit as HTMLButtonElement).disabled).toBe(true)
     expect(doc.querySelector('.tf-drawer-body')!.textContent).toContain('留空由 AI 补全')
+    // 执行模式单选（§7.1b）：默认完全权限
+    expect(doc.querySelector('[aria-label="执行模式"]')).toBeTruthy()
+    expect([...doc.querySelectorAll('.tf-mode-card')].map(el => el.className).join(',')).toContain('active')
+  })
+
+  it('审批模式：通知栏条目 + 抽屉审批卡 + 完全放行后流转待验收', async () => {
+    const doc = dom.window.document
+    ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement).click()
+    // 挂全局通知栏（bundle 出口同款 API）
+    const api = (dom.window as unknown as {
+      __taskflowDemo: { mountNotificationLayer(root: HTMLElement, transport: unknown, options?: { onOpen?: () => void }): () => void }
+    }).__taskflowDemo
+    api.mountNotificationLayer(dom.window.document.body, {
+      getState: () => engine.getState(),
+      dispatch: (action: unknown) => engine.dispatch(action) as Promise<DispatchResult>,
+      subscribe: (onChange: () => void) => engine.subscribe(onChange),
+    })
+
+    // 审批模式任务：mock 会话发起提权审批并挂起（每任务首个会话）
+    const asked = new Set<string>()
+    adapter.executionBehavior = async input => {
+      if (!asked.has(input.taskId)) {
+        asked.add(input.taskId)
+        const decision = await input.approvals.request({
+          sessionId: input.sessionId,
+          toolName: 'write',
+          reason: '（render test）需要写入报告文件',
+        })
+        if (decision === 'rejected') {
+          await input.tools.reportBlocker('提权被拒')
+          return
+        }
+      }
+      const result = await input.tools.submitEvidence(buildPassingEvidence(engine.getState().ledger, input.subtaskId))
+      if (!result.accepted) throw new Error(result.correction)
+    }
+    const created = await engine.dispatch({
+      type: 'createTask',
+      requestId: 'ui-appr',
+      title: '审批模式演示任务',
+      description: '写入一份演示报告。',
+      pins: { executionMode: 'approval' },
+    })
+    expect(created.ok).toBe(true)
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.approvals?.some(a => a.status === 'pending') ?? false)
+
+    // 通知栏出现待审批条目；看板卡片出现「待审批」chip
+    await waitFor(() => doc.querySelector('.tf-notification-layer .tf-notify') !== null)
+    expect(doc.querySelector('.tf-notify')!.textContent).toContain('等待权限审批')
+    await waitFor(() => [...doc.querySelectorAll('.tf-chip')].some(el => el.textContent === '待审批'))
+
+    // 打开任务抽屉 → 审批区可见 → 「完全放行」
+    const approvalCard = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('审批模式演示任务'))
+    ;(approvalCard as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-approval') !== null)
+    const allowBtn = [...doc.querySelectorAll('.tf-approval button')].find(b => b.textContent?.includes('完全放行'))
+    expect(allowBtn).toBeTruthy()
+    ;(allowBtn as HTMLElement).click()
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.status === 'review')
+    expect(engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.approvals?.[0]?.status).toBe('elevated')
+    // 裁决后通知条目消失
+    await waitFor(() => doc.querySelector('.tf-notification-layer .tf-notify') === null)
+  })
+
+  it('模型设置浮层：齿轮打开 → 两槽下拉 → 修改即写入引擎设置', async () => {
+    const doc = dom.window.document
+    // 关闭上一用例遗留的弹窗，回到看板
+    const closeDrawer = [...doc.querySelectorAll('.tf-modal-head button')].at(-1) as HTMLElement | undefined
+    closeDrawer?.click()
+    await waitFor(() => doc.querySelector('.tf-modal') === null)
+
+    // 齿轮打开浮层
+    ;(doc.querySelector('[aria-label="模型设置"]') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-popover') !== null)
+    expect(doc.querySelector('.tf-popover')!.textContent).toContain('模型设置')
+    // 目录异步到达：「跟随宿主默认」项带出宿主默认值后再断言
+    await waitFor(() => doc.querySelector('.tf-popover')!.textContent?.includes('跟随宿主默认（deepseek/deepseek-chat）') ?? false)
+    const execSelect = doc.querySelector('select[aria-label="执行 agent · 模型"]') as HTMLSelectElement
+    const decompSelect = doc.querySelector('select[aria-label="拆解 agent · 模型"]') as HTMLSelectElement
+    expect(execSelect).toBeTruthy()
+    expect(decompSelect).toBeTruthy()
+    // optgroup 按 provider 分组（两槽 × 2 provider）
+    expect(doc.querySelectorAll('.tf-popover optgroup').length).toBe(4)
+
+    // 执行槽选择 ollama 模型（原生 setter 绕过 React value tracker）
+    const nativeSelectSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value')!.set!
+    nativeSelectSetter.call(execSelect, 'ollama::qwen3:8b')
+    execSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await waitFor(() => engine.getModelSettings().execution?.model === 'qwen3:8b')
+    expect(engine.getModelSettings().decompose).toBeNull()
+    await waitFor(() => doc.querySelector('.tf-popover')!.textContent?.includes('已保存') ?? false)
+    // 拆解槽保持跟随宿主默认
+    expect(decompSelect.value).toBe('')
+
+    // Esc 关闭浮层
+    doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await waitFor(() => doc.querySelector('.tf-popover') === null)
   })
 })

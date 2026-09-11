@@ -41,9 +41,14 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="module">
-    import { mountTaskflow, createHttpTransport } from '/client.demo.js'
-    mountTaskflow(document.getElementById('root'), createHttpTransport(''))
+  <!-- client.demo.js 是 IIFE（渲染冒烟同款入口）：全局对象 = 模块导出 -->
+  <script src="/client.demo.js"></script>
+  <script>
+    const { mountTaskflow, mountNotificationLayer, createHttpTransport } = window.__taskflowDemo
+    const transport = createHttpTransport('')
+    mountTaskflow(document.getElementById('root'), transport)
+    // 全局通知栏（demo 形态：看板常驻，无需再开合）
+    mountNotificationLayer(document.body, transport, { onOpen: () => {} })
   </script>
 </body>
 </html>

@@ -5,6 +5,9 @@ import {
   columnOf,
   filterTasks,
   mergedTimeline,
+  modelForSession,
+  pendingApprovalCount,
+  pendingApprovalsOf,
   progressRatio,
   reviewBadgeCount,
   relativeTime,
@@ -178,5 +181,131 @@ describe('相对时间', () => {
     expect(relativeTime(now - 5 * 60_000, now)).toBe('5 分钟前')
     expect(relativeTime(now - 3 * 3_600_000, now)).toBe('3 小时前')
     expect(relativeTime(now - 2 * 86_400_000, now)).toBe('2 天前')
+  })
+})
+
+describe('权限审批视图模型（§7.1b）', () => {
+  function taskWithApproval(statuses: Array<'pending' | 'elevated' | 'rejected' | 'expired'>) {
+    return mkTask({
+      subtasks: [
+        {
+          id: 'tf_1_s1',
+          title: '采集系统信息',
+          detail: '',
+          acceptance: [{ id: 'ac_1', text: '输出采集报告' }],
+          deps: [],
+          status: 'in-progress',
+          round: 1,
+          history: [],
+          sessionIds: [],
+          attempt: 1,
+          evidenceHistory: [],
+          progressNotes: [],
+        },
+      ],
+      approvals: statuses.map((status, i) => ({
+        id: `ap_${i}`,
+        subtaskId: 'tf_1_s1',
+        sessionId: `tfs_s${i}`,
+        toolName: 'write',
+        reason: '需要写入文件',
+        status,
+        createdAt: 1_000 + i,
+      })),
+    })
+  }
+
+  it('pendingApprovalsOf：只投影 pending 并带上子任务标题', () => {
+    const task = taskWithApproval(['pending', 'elevated', 'pending'])
+    const pending = pendingApprovalsOf(task)
+    expect(pending).toHaveLength(2)
+    expect(pending[0]).toMatchObject({ id: 'ap_0', subtaskTitle: '采集系统信息', toolName: 'write', taskId: 'tf_1' })
+    expect(pending[1]?.id).toBe('ap_2')
+    expect(pendingApprovalCount([task])).toBe(2)
+    expect(pendingApprovalCount([mkTask(), task])).toBe(2)
+  })
+
+  it('cardSummary：待审批是最优先的人工等待态', () => {
+    const withApproval = taskWithApproval(['pending'])
+    expect(cardSummary(withApproval).awaitingHuman).toBe('approval')
+    const decided = taskWithApproval(['elevated'])
+    decided.status = 'review'
+    expect(cardSummary(decided).awaitingHuman).toBe('review')
+  })
+})
+
+describe('模型留痕视图（§PLAN-MODEL）', () => {
+  it('时间线条目透出 refs.model', () => {
+    const task = mkTask({
+      events: [
+        { id: 'e1', at: 100, from: null, to: 'draft', actor: 'human' },
+        {
+          id: 'e2',
+          at: 200,
+          from: 'draft',
+          to: 'decomposing',
+          actor: 'human',
+          refs: { sessionId: 'tfs_d1', model: 'deepseek/deepseek-reasoner·high' },
+        },
+      ],
+      subtasks: [
+        {
+          id: 'tf_1_s1',
+          title: '子任务 A',
+          detail: 'd',
+          deps: [],
+          acceptance: [],
+          status: 'in-progress',
+          round: 1,
+          attempt: 1,
+          progressNotes: [],
+          evidenceHistory: [],
+          history: [
+            {
+              id: 'sev1',
+              at: 300,
+              from: null,
+              to: 'pending',
+              actor: 'system',
+            },
+            {
+              id: 'sev2',
+              at: 400,
+              from: 'pending',
+              to: 'in-progress',
+              actor: 'system',
+              refs: { sessionId: 'tfs_s1', model: 'ollama/qwen3:8b' },
+            },
+          ],
+        } as unknown as Subtask,
+      ],
+    })
+    const entries = mergedTimeline(task)
+    expect(entries.find(entry => entry.id === 'e2')?.model).toBe('deepseek/deepseek-reasoner·high')
+    expect(entries.find(entry => entry.id === 'sev2')?.model).toBe('ollama/qwen3:8b')
+    expect(entries.find(entry => entry.id === 'sev1')?.model).toBeUndefined()
+  })
+
+  it('modelForSession：按 sessionId 反查最近一次留痕', () => {
+    const sub = {
+      id: 'tf_1_s1',
+      title: 's',
+      detail: '',
+      deps: [],
+      acceptance: [],
+      status: 'review',
+      round: 1,
+      attempt: 1,
+      progressNotes: [],
+      evidenceHistory: [],
+      history: [
+        { id: 'a', at: 1, from: null, to: 'pending', actor: 'system', refs: { sessionId: 'tfs_old', model: 'old/model' } },
+        { id: 'b', at: 2, from: 'pending', to: 'in-progress', actor: 'system', refs: { sessionId: 'tfs_new' } },
+        { id: 'c', at: 3, from: 'in-progress', to: 'in-progress', actor: 'system', refs: { sessionId: 'tfs_new', model: 'new/model' } },
+      ],
+    } as unknown as Subtask
+    expect(modelForSession(sub, 'tfs_new')).toBe('new/model')
+    expect(modelForSession(sub, 'tfs_old')).toBe('old/model')
+    expect(modelForSession(sub, 'tfs_missing')).toBeUndefined()
   })
 })

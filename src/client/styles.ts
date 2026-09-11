@@ -87,6 +87,9 @@ export const TASKFLOW_CSS = `
 .tf-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tf-badge-review { margin-left: auto; color: ${V.warnLabel}; background: ${V.warnTertiary}; }
 .tf-badge-review i { width: 6px; height: 6px; border-radius: 50%; background: ${V.warn}; flex: none; }
+.tf-badge-approval { color: ${V.warnLabel}; background: ${V.warnTertiary}; }
+.tf-badge-approval i { width: 6px; height: 6px; border-radius: 50%; background: ${V.warn}; flex: none; animation: tf-pulse 1.6s ease-in-out infinite; }
+@keyframes tf-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* —— 列（方案三：淡灰圆角栏容器）—— */
 .tf-columns { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 12px; flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; padding: 16px 20px 12px; scrollbar-color: ${V.borderL3} ${V.bgHover}; scrollbar-width: thin; }
@@ -150,6 +153,71 @@ export const TASKFLOW_CSS = `
 .tf-drawer-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px 12px; }
 .tf-drawer-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tf-drawer-body { flex: 1; overflow-y: auto; padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+/* —— 任务详情弹窗（验收工作台容器）：居中大卡，窄屏退化为全屏 —— */
+.tf-overlay-center { align-items: center; justify-content: center; padding: 24px; }
+.tf-modal { width: min(1240px, 100%); height: min(820px, 100%); background: ${V.bgBase}; border: 1px solid ${V.borderL2}; border-radius: 14px; box-shadow: ${V.shadow3}; display: flex; flex-direction: column; overflow: hidden; color: ${V.label}; animation: tf-pop 180ms ease-out; outline: none; }
+.tf-modal:focus-visible { outline: none; }
+@keyframes tf-pop { from { transform: translateY(10px) scale(0.985); opacity: 0; } }
+.tf-modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px 10px; }
+.tf-modal-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 16px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
+/* 普通滚动态：子项不参与 flex 压缩（否则内容超高时区块会被压扁而非滚动） */
+.tf-modal-body:not(.tf-modal-body-fill) > * { flex: none; }
+.tf-modal-body-fill { overflow: hidden; }
+.tf-modal-foot { flex: none; border-top: 1px solid ${V.borderL1}; padding: 10px 20px; }
+.tf-modal-foot .tf-actions { padding-top: 0; }
+.tf-modal .tf-banner { margin: 0; }
+
+/* —— 验收工作台（2026-09-11 语义：任务级判定面优先 + 过程举证折叠附录 + 吸底裁决栏）—— */
+.tf-review { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tf-review-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 2px 4px 12px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
+.tf-review-scroll > * { flex: none; }
+.tf-review-foot { flex: none; border-top: 1px solid ${V.borderL1}; padding-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tf-review-foot .tf-textarea { flex: 1; min-width: 220px; min-height: 54px; }
+.tf-review-foot .tf-btn { flex: none; }
+.tf-task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* —— 执行过程举证（手风琴附录）—— */
+.tf-proc { display: flex; flex-direction: column; gap: 4px; }
+.tf-proc-item { border: 1px solid ${V.borderL1}; border-radius: 10px; background: ${V.bgBase}; overflow: hidden; }
+.tf-proc-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 8px 10px; font-size: 12.5px; color: ${V.label2}; transition: background-color 120ms ease; }
+.tf-proc-row:hover { background: ${V.bgHover}; color: ${V.label}; }
+.tf-proc-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.tf-proc-item > .tf-ev, .tf-proc-item > .tf-item, .tf-proc-item > span:last-child { border-top: 1px solid ${V.borderL1}; padding: 12px; margin: 0; }
+.tf-proc-item > .tf-ev { border-top: 1px solid ${V.borderL1}; padding: 12px; border-radius: 0; }
+
+/* —— 证据详情（分层：判定先行 / 自检前置 / 摘要限高 / 验证折叠）—— */
+.tf-ev { display: flex; flex-direction: column; gap: 14px; }
+.tf-ev-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tf-ev-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 200px; }
+.tf-checkbadge { flex: none; font-size: 12px; font-weight: 700; line-height: 20px; padding: 0 10px; border-radius: 999px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tf-checkbadge.ok { color: ${V.inkGreen}; background: ${V.successTertiary}; }
+.tf-checkbadge.mid { color: ${V.warnLabel}; background: ${V.warnTertiary}; }
+.tf-checkbadge.bad { color: ${V.errorSecondary}; background: ${V.errorTertiary}; }
+.tf-checkbadge.mini { font-size: 10.5px; line-height: 16px; padding: 0 6px; font-weight: 600; }
+.tf-ev-section { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid ${V.borderL1}; padding-top: 10px; }
+.tf-ev-sechead { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; min-height: 24px; }
+.tf-ev-caret { display: inline-block; flex: none; font-size: 9px; color: ${V.label3}; transition: transform 120ms ease; }
+.tf-ev-caret.open { transform: rotate(90deg); }
+.tf-ev-sechead .tf-section-title { font-size: 12.5px; }
+.tf-ev-sechead .tf-link-btn { margin-left: auto; }
+.tf-ev-summary { font-size: 13px; line-height: 1.6; color: ${V.label2}; overflow-wrap: anywhere; white-space: pre-wrap; }
+.tf-ev-summary.tf-clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.tf-ev-check { display: flex; align-items: flex-start; gap: 8px; }
+.tf-ev-check .tf-verdict { margin-top: 2px; }
+.tf-ev-check-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.tf-ev-check-ac { font-size: 13px; color: ${V.label}; overflow-wrap: anywhere; }
+.tf-ev-check-note { font-size: 12px; line-height: 1.55; color: ${V.label3}; overflow-wrap: anywhere; }
+.tf-ev-verify { display: flex; flex-direction: column; }
+.tf-ev-verify-label { flex: 1; min-width: 0; font-family: ${V.codeFont}; font-size: 12px; color: ${V.label2}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-ev-verify .tf-verify { max-height: 260px; margin-top: 4px; }
+.tf-ev > .tf-hint { padding-top: 2px; border-top: 1px solid ${V.borderL1}; }
+
+@media (max-width: 760px), (max-height: 560px) {
+  .tf-overlay-center { padding: 0; }
+  .tf-modal { width: 100%; height: 100%; border-radius: 0; border: none; }
+}
 
 /* —— 标签页 —— */
 .tf-tabs { display: flex; gap: 18px; padding: 0 20px; border-bottom: 1px solid ${V.borderL1}; flex: none; }
@@ -237,6 +305,46 @@ export const TASKFLOW_CSS = `
 
 /* —— 浮动入口（侧栏锚点找不到时的保底；须高于看板层 90 才能点到）—— */
 .tf-floating-entry { position: fixed; right: 16px; bottom: 16px; z-index: 1200; box-shadow: ${V.shadow2}; }
+
+/* —— 全局通知层（§7.1b）：body 级、z-index 95 = 看板 90 之上（开板也可见）、
+   宿主自有弹窗 100 之下（不抢弹窗）。容器 click-through、条目自管 pointer-events。 —— */
+.tf-notification-layer { position: fixed; top: 12px; right: 12px; z-index: 95; pointer-events: none; width: 340px; max-width: calc(100vw - 24px); }
+.tf-notify-stack { display: flex; flex-direction: column; gap: 8px; }
+.tf-notify { pointer-events: auto; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: ${V.bgLayer2}; border: 1px solid ${V.borderL1}; box-shadow: ${V.shadow2}; }
+.tf-notify-dot { width: 8px; height: 8px; border-radius: 50%; background: ${V.warn}; flex: none; }
+.tf-notify-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.tf-notify-title { font-size: 12px; font-weight: 600; color: ${V.label}; }
+.tf-notify-desc { font-size: 11px; color: ${V.label2}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-notify-go { flex: none; min-height: 26px; padding: 2px 10px; font-size: 12px; }
+
+/* —— 执行模式选择卡（创建表单，§7.1b）—— */
+.tf-mode-row { display: flex; gap: 8px; }
+.tf-mode-card { position: relative; flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 10px; border: 1px solid ${V.borderL1}; cursor: pointer; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.tf-mode-card:hover { background: ${V.bgHover}; }
+.tf-mode-card.active { border-color: ${V.business}; box-shadow: 0 0 0 1px ${V.business} inset; }
+.tf-mode-card input { margin: 0; accent-color: ${V.business}; }
+.tf-mode-title { font-size: 12px; font-weight: 600; color: ${V.label}; display: flex; align-items: center; gap: 6px; }
+.tf-mode-desc { font-size: 11px; line-height: 1.4; color: ${V.label2}; }
+
+/* —— 抽屉审批区（§7.1b：两档裁决 = 完全放行 / 拒绝）—— */
+.tf-approvals { display: flex; flex-direction: column; gap: 8px; border: 1px solid ${V.warnTertiary}; border-radius: 10px; padding: 10px; background: ${V.warnTertiary}; }
+.tf-approval { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; background: ${V.bgLayer2}; border: 1px solid ${V.borderL1}; }
+.tf-approval-focus { outline: 2px solid var(--dsw-alias-focus-ring, #4c8dff); outline-offset: 2px; }
+.tf-approval-reason { font-size: 11px; color: ${V.label2}; font-family: var(--dsw-alias-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); word-break: break-all; }
+
+/* —— 模型设置（工具栏齿轮浮层，§PLAN-MODEL）—— */
+.tf-settings-anchor { position: relative; display: inline-flex; }
+.tf-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: 320px; max-width: min(340px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: ${V.bgBase}; border: 1px solid ${V.borderL2}; box-shadow: ${V.shadow3}; animation: tf-fade 120ms ease-out; text-align: left; }
+.tf-pop-head { display: flex; align-items: center; gap: 8px; }
+.tf-pop-title { font-size: 13px; font-weight: 700; flex: 1; }
+.tf-slot { display: flex; flex-direction: column; gap: 6px; }
+.tf-slot-label { font-size: 12px; font-weight: 600; color: ${V.label2}; display: flex; align-items: baseline; gap: 6px; }
+.tf-slot-desc { font-size: 11px; font-weight: 400; color: ${V.label3}; }
+.tf-slot .tf-select { width: 100%; }
+.tf-select-warn { border-color: ${V.warn}; }
+.tf-pop-error { color: ${V.error}; }
+.tf-pop-state { font-size: 11.5px; min-height: 16px; color: ${V.inkGreen}; }
+.tf-chip-mono { font-family: ${V.codeFont}; font-size: 10.5px; }
 
 @media (prefers-reduced-motion: reduce) {
   .tf-root *, .tf-card, .tf-btn, .tf-progress-bar { animation: none !important; transition: none !important; }

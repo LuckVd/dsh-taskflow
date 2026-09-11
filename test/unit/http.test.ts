@@ -73,6 +73,70 @@ describe('/api/taskflow 端点（§6）', () => {
   })
 })
 
+describe('模型设置与模型目录端点（§PLAN-MODEL）', () => {
+  function settingsEngine(): { engine: TaskflowEngine; saved: unknown[] } {
+    const saved: unknown[] = []
+    const engine = {
+      getState: () => ({ ledger: { schemaVersion: 1, revision: 1, tasks: [] }, health: { corrupt: null, lastWriteFailed: false } }),
+      dispatch: async () => ({ ok: true }),
+      subscribe: () => () => undefined,
+      getModelSettings: () => current,
+      setModelSettings: (next: unknown) => {
+        saved.push(next)
+        current = next
+      },
+    } as unknown as TaskflowEngine
+    let current = { decompose: null, execution: null }
+    return { engine, saved }
+  }
+
+  it('GET settings 默认两槽 null', async () => {
+    const { engine } = settingsEngine()
+    const result = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/settings', undefined)
+    expect(result.status).toBe(200)
+    expect(JSON.parse(result.body)).toEqual({ decompose: null, execution: null })
+  })
+
+  it('PUT settings 合法形状写入并回显；非法形状 400 且不写', async () => {
+    const { engine, saved } = settingsEngine()
+    const ok = await handleTaskflowRequest(
+      engine,
+      'PUT',
+      '/api/taskflow/settings',
+      JSON.stringify({ execution: { provider: 'deepseek', model: ' deepseek-chat ', reasoningEffort: 'high' } }),
+    )
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body).execution).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
+    expect(saved).toHaveLength(1)
+
+    const bad = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', JSON.stringify({ decompose: { provider: '' } }))
+    expect(bad.status).toBe(400)
+    const badJson = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', 'not json')
+    expect(badJson.status).toBe(400)
+    const noBody = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', undefined)
+    expect(noBody.status).toBe(400)
+    expect(saved).toHaveLength(1)
+  })
+
+  it('GET models：未注入提供方 501；注入则透传目录（目录加载失败 502）', async () => {
+    const { engine } = settingsEngine()
+    const missing = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/models', undefined)
+    expect(missing.status).toBe(501)
+
+    const catalog = { default: { provider: 'p', model: 'm' }, groups: [] }
+    const ok = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/models', undefined, { models: async () => catalog })
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body)).toEqual(catalog)
+
+    const fail = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/models', undefined, {
+      models: async () => {
+        throw new Error('registry gone')
+      },
+    })
+    expect(fail.status).toBe(502)
+  })
+})
+
 describe('SSE 流（NFR-04）', () => {
   it('hello 帧含当前 revision；change 帧在变更时推送；dispose 停止', async () => {
     const listeners: Array<(ledger: unknown) => void> = []

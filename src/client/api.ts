@@ -4,23 +4,63 @@
  * @module dsh-taskflow/client
  */
 
-import type { DispatchResult, EngineState } from '../protocol/types.ts'
+import type { DispatchResult, EngineState, ModelCatalog, ModelSettings } from '../protocol/types.ts'
 import type { TaskflowAction } from '../protocol/actions.ts'
 
 export interface TaskflowTransport {
   getState(): Promise<EngineState>
+  /** 最近一次成功快照（同步返回；从未加载过为 null）。看板秒开用：宿主办共享传输，
+   *  通知栏在页面加载时已拉过一版，点开看板直接用它首屏渲染，再在后台对账。 */
+  getCachedState(): EngineState | null
   dispatch(action: TaskflowAction): Promise<DispatchResult>
   /** 订阅 revision 变化；返回退订函数。 */
   subscribe(onChange: () => void): () => void
+  /** 全局模型设置（模型设置浮层）。 */
+  getSettings(): Promise<ModelSettings>
+  /** 覆盖全局模型设置；服务端校验失败时抛错（调用方回滚 UI）。 */
+  saveSettings(next: ModelSettings): Promise<ModelSettings>
+  /** 宿主模型目录（下拉数据源）；部署未提供时抛错。 */
+  getModels(): Promise<ModelCatalog>
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    // 服务端错误体（{ok:false,error}）优先展示：只回状态码会让浮层只剩「HTTP 502」这种无信息量提示
+    let detail = ''
+    try {
+      const body = (await response.json()) as { error?: unknown }
+      if (typeof body?.error === 'string' && body.error.length > 0) detail = `：${body.error}`
+    } catch {
+      // 非 JSON 错误体：退回状态码
+    }
+    throw new Error(`HTTP ${response.status}${detail}`)
+  }
+  return (await response.json()) as T
 }
 
 export function createHttpTransport(base = ''): TaskflowTransport {
   let source: EventSource | undefined
+  /** 最近一次成功快照缓存（模块内共享传输时多个订阅者共用）。 */
+  let cache: EngineState | null = null
+  /** 单飞行：并发 getState 只发一个请求（首屏 refresh 与 SSE hello 触发的 refresh 合并）。 */
+  let inflight: Promise<EngineState> | null = null
   return {
     async getState(): Promise<EngineState> {
-      const response = await fetch(`${base}/api/taskflow/state`, { headers: { accept: 'application/json' } })
-      if (!response.ok) throw new Error(`state ${response.status}`)
-      return (await response.json()) as EngineState
+      if (inflight === null) {
+        inflight = (async () => {
+          const response = await fetch(`${base}/api/taskflow/state`, { headers: { accept: 'application/json' } })
+          if (!response.ok) throw new Error(`state ${response.status}`)
+          const state = (await response.json()) as EngineState
+          cache = state
+          return state
+        })().finally(() => {
+          inflight = null
+        })
+      }
+      return inflight
+    },
+    getCachedState(): EngineState | null {
+      return cache
     },
     async dispatch(action: TaskflowAction): Promise<DispatchResult> {
       const response = await fetch(`${base}/api/taskflow/action`, {
@@ -32,6 +72,8 @@ export function createHttpTransport(base = ''): TaskflowTransport {
       return (await response.json()) as DispatchResult
     },
     subscribe(onChange: () => void): () => void {
+      // 非浏览器环境（jsdom 测试 / SSR 形态）无 EventSource：降级为轮询不可用的静默 no-op
+      if (typeof EventSource === 'undefined') return () => undefined
       source?.close()
       source = new EventSource(`${base}/api/taskflow/events`)
       source.addEventListener('change', onChange)
@@ -41,6 +83,21 @@ export function createHttpTransport(base = ''): TaskflowTransport {
         source = undefined
       }
     },
+    async getSettings(): Promise<ModelSettings> {
+      return readJson(await fetch(`${base}/api/taskflow/settings`, { headers: { accept: 'application/json' } }))
+    },
+    async saveSettings(next: ModelSettings): Promise<ModelSettings> {
+      return readJson(
+        await fetch(`${base}/api/taskflow/settings`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(next),
+        }),
+      )
+    },
+    async getModels(): Promise<ModelCatalog> {
+      return readJson(await fetch(`${base}/api/taskflow/models`, { headers: { accept: 'application/json' } }))
+    },
   }
 }
 
@@ -49,10 +106,19 @@ export function createLocalTransport(engine: {
   getState(): EngineState
   dispatch(action: unknown): Promise<DispatchResult>
   subscribe(listener: () => void): () => void
+  getModelSettings?(): ModelSettings
+  setModelSettings?(next: ModelSettings): void
 }): TaskflowTransport {
   return {
     getState: () => Promise.resolve(engine.getState()),
+    getCachedState: () => engine.getState(),
     dispatch: action => engine.dispatch(action),
     subscribe: onChange => engine.subscribe(onChange),
+    getSettings: async () => engine.getModelSettings?.() ?? { decompose: null, execution: null },
+    saveSettings: async next => {
+      engine.setModelSettings?.(next)
+      return engine.getModelSettings?.() ?? next
+    },
+    getModels: async () => ({ default: null, groups: [] }),
   }
 }

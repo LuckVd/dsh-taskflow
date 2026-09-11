@@ -11,7 +11,9 @@ import type {
   DecomposeSessionInput,
   ExecutionSessionInput,
   ExecutionOutcome,
+  FinalCheckSessionInput,
   SessionAdapter,
+  TriageSessionInput,
 } from '../engine.ts'
 import type { Ledger } from '../../protocol/types.ts'
 
@@ -30,16 +32,22 @@ export type ExecutionBehavior = (
 /**
  * 可脚本化 mock 适配器。默认行为：
  * - 拆解：产出合法的 2 子任务输出（含任务级验收建议稿）；
- * - 执行：提交三要素齐全、全 pass 的证据。
- * 测试用 `decomposeBehavior` / `executionBehavior` 覆盖。
+ * - 执行：提交三要素齐全、全 pass 的证据；
+ * - 终检：产出与任务级验收标准逐条对应、全 pass 的任务级证据；
+ * - 打回定位：返回全部 review 态子任务（等价旧的全量打回语义）。
+ * 测试用 `decomposeBehavior` / `executionBehavior` / `finalizeBehavior` / `triageBehavior` 覆盖。
  */
 export class MockSessionAdapter implements SessionAdapter {
   readonly kind = 'mock'
   decomposeBehavior?: DecomposeBehavior
   executionBehavior?: ExecutionBehavior
+  finalizeBehavior?: DecomposeBehavior
+  triageBehavior?: DecomposeBehavior
 
   readonly decomposeRuns: DecomposeSessionInput[] = []
   readonly executionRuns: ExecutionSessionInput[] = []
+  readonly finalizeRuns: FinalCheckSessionInput[] = []
+  readonly triageRuns: TriageSessionInput[] = []
   readonly cancelled: string[] = []
   readonly knownSessions = new Set<string>()
 
@@ -68,6 +76,20 @@ export class MockSessionAdapter implements SessionAdapter {
     } catch (error) {
       return { kind: 'crashed', error: error instanceof Error ? error.message : String(error) }
     }
+  }
+
+  async runFinalCheckSession(input: FinalCheckSessionInput): Promise<DecomposeResult> {
+    this.finalizeRuns.push(input)
+    this.knownSessions.add(input.sessionId)
+    const behavior = this.finalizeBehavior ?? defaultFinalizeBehavior(this.getLedger())
+    return behavior(input, this.finalizeRuns.length)
+  }
+
+  async runTriageSession(input: TriageSessionInput): Promise<DecomposeResult> {
+    this.triageRuns.push(input)
+    this.knownSessions.add(input.sessionId)
+    const behavior = this.triageBehavior ?? defaultTriageBehavior(this.getLedger())
+    return behavior(input, this.triageRuns.length)
   }
 
   async hasSessionRecord(sessionId: string): Promise<boolean> {
@@ -129,6 +151,35 @@ export function buildPassingEvidence(ledger: Ledger, subtaskId: string): unknown
     ],
     selfCheck: sub.acceptance.map(a => ({ acceptanceId: a.id, verdict: 'pass', note: 'mock 全过' })),
     diffSummary: '+10 −2（mock 文件）',
+  }
+}
+
+/** 默认终检行为：与任务级验收标准逐条对应、全 pass 的任务级证据。 */
+export function defaultFinalizeBehavior(ledger: Ledger): DecomposeBehavior {
+  return input => {
+    const task = ledger.tasks.find(t => t.id === input.taskId)
+    return {
+      kind: 'ok',
+      output: {
+        changesSummary: `（mock）任务「${task?.title}」终检：整体交付对照任务级验收标准逐条核验通过。`,
+        verification: [{ label: 'mock-final-verify', output: 'OK — final review passed', passed: true }],
+        selfCheck: (task?.contract.acceptance ?? []).map(a => ({ acceptanceId: a.id, verdict: 'pass', note: 'mock 终检全过' })),
+      },
+    }
+  }
+}
+
+/** 默认打回定位行为：全部 review 态子任务（等价旧的全量打回语义）。 */
+export function defaultTriageBehavior(ledger: Ledger): DecomposeBehavior {
+  return input => {
+    const task = ledger.tasks.find(t => t.id === input.taskId)
+    return {
+      kind: 'ok',
+      output: {
+        reworkSubtaskIds: (task?.subtasks ?? []).filter(s => s.status === 'review').map(s => s.id),
+        note: '（mock）默认全量返工',
+      },
+    }
   }
 }
 

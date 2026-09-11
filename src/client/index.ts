@@ -22,14 +22,18 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { createElement } from 'react'
 import { TaskflowApp } from './TaskflowApp.tsx'
+import { NotificationBar } from './NotificationBar.tsx'
 import type { TaskflowTransport } from './api.ts'
 import { createHttpTransport } from './api.ts'
 import { injectStyles } from './styles.ts'
 
 export { TaskflowApp }
+export { NotificationBar }
 export { createHttpTransport, createLocalTransport } from './api.ts'
 export type { TaskflowTransport } from './api.ts'
 export * from './view.ts'
+export { setBoardFocus, clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
+export type { BoardFocus } from './focus.ts'
 
 const roots = new WeakMap<HTMLElement, Root>()
 
@@ -142,6 +146,33 @@ function toggleBoard(): void {
 function sidebarWidth(): number {
   if (sidebarColumn === null || !sidebarColumn.isConnected) return 0
   return Math.max(0, Math.round(sidebarColumn.getBoundingClientRect().width))
+}
+
+// —— 全局通知栏（body 级，z-index 95：看板 90 之上、宿主自有弹窗 100 之下）——
+
+/**
+ * 全局通知栏挂载：待裁决审批的常驻条目 + 「去处理」跳转。
+ * 容器 click-through、条目自管 pointer-events；纯 DOM + 既有 HTTP/SSE，
+ * 对宿主与其他插件零感知（通用性红线）。幂等由调用方保证。
+ */
+export function mountNotificationLayer(
+  mountRoot: HTMLElement,
+  transport: TaskflowTransport,
+  options?: { onOpen?: () => void },
+): () => void {
+  injectStyles(mountRoot.ownerDocument ?? document)
+  const host = document.createElement('div')
+  host.className = 'tf-notification-layer'
+  const root = createRoot(host)
+  root.render(createElement(NotificationBar, {
+    transport,
+    onOpen: options?.onOpen ?? (() => {}),
+  }))
+  mountRoot.append(host)
+  return () => {
+    root.unmount()
+    host.remove()
+  }
 }
 
 function syncEntry(): void {
@@ -312,15 +343,17 @@ function watchSessionSwitch(ctx: MinimalClientContext): () => void {
   return unsubscribe
 }
 
-/** dsh 客户端模块 apply：侧栏顶部入口 + body 级看板层 + 会话切换自动退出。 */
+/** dsh 客户端模块 apply：侧栏顶部入口 + body 级看板层 + 全局通知栏 + 会话切换自动退出。 */
 export function clientApply(ctx: MinimalClientContext): void {
   injectStyles()
   const cleanupEntry = installSidebarEntry(toggleBoard)
+  const disposeNotify = mountNotificationLayer(document.body, getTransport(), { onOpen: () => setBoardOpen(true) })
   const disposeSessionWatch = watchSessionSwitch(ctx)
   ctx.effect?.(() => () => disposeSessionWatch(), 'taskflow.session-watch')
   ctx.effect?.(() => {
     return () => {
       cleanupEntry()
+      disposeNotify()
       setBoardOpen(false)
     }
   }, 'taskflow.entry-cleanup')

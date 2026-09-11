@@ -15,7 +15,8 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 // 类型-only 导入：引入宿主对 cordis Context 的事件增强（agent/created），零运行时依赖。
 import type {} from '@deepseek-ai/dsh-agent'
 import { asSessionId, createUserMessage, type SessionId } from './compat.ts'
-import type { DecomposeResult, DecomposeSessionInput, ExecutionOutcome, ExecutionSessionInput, SessionAdapter } from '../engine.ts'
+import type { DecomposeResult, DecomposeSessionInput, ExecutionOutcome, ExecutionSessionInput, FinalCheckSessionInput, SessionAdapter, TriageSessionInput } from '../engine.ts'
+import type { SessionModelSelection } from '../../protocol/types.ts'
 import { registerTaskflowTools } from './tools.ts'
 
 export interface DshAdapterOptions {
@@ -29,12 +30,8 @@ export interface DshAdapterOptions {
   defaultModelSelection?: () => ModelSelection | undefined
 }
 
-/** 会话的模型选择（同宿主 agentDefaultModel 的选择类型）。 */
-export interface ModelSelection {
-  provider: string
-  model: string
-  reasoningEffort?: string
-}
+/** 会话的模型选择（协议层共享类型；同宿主 agentDefaultModel 的选择类型）。 */
+export type ModelSelection = SessionModelSelection
 
 interface AdapterServices {
   agents: {
@@ -59,6 +56,8 @@ interface AdapterServices {
 export class DshSessionAdapter implements SessionAdapter {
   readonly kind = 'dsh'
   private readonly services: AdapterServices
+  /** 运行中会话的存活跟踪（sessionId → session），供 elevateSession 原地提权。 */
+  private readonly liveSessions = new Map<string, unknown>()
 
   constructor(private readonly options: DshAdapterOptions) {
     const ctx = options.ctx as unknown as Record<string, unknown>
@@ -70,7 +69,35 @@ export class DshSessionAdapter implements SessionAdapter {
     }
   }
 
+  /** decideApproval「完全放行」：把运行中会话的权限预设原地提升。 */
+  async elevateSession(sessionId: string, preset: string): Promise<boolean> {
+    const session = this.liveSessions.get(sessionId)
+    const presets = this.services.permissionPresets
+    if (session === undefined || presets === undefined) return false
+    try {
+      presets.set(session, preset)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async runDecomposeSession(input: DecomposeSessionInput): Promise<DecomposeResult> {
+    return this.runJsonSession(input, '拆解')
+  }
+
+  /** 任务级终检会话（§4.5，2026-09-11 语义升级）：JSON 文本输出，形制同拆解。 */
+  async runFinalCheckSession(input: FinalCheckSessionInput): Promise<DecomposeResult> {
+    return this.runJsonSession(input, '终检')
+  }
+
+  /** 打回定位会话（§4.6，2026-09-11 语义升级）：JSON 文本输出，形制同拆解。 */
+  async runTriageSession(input: TriageSessionInput): Promise<DecomposeResult> {
+    return this.runJsonSession(input, '打回定位')
+  }
+
+  /** 通用 JSON 会话：创建 → followup(prompt) → 取最后 assistant 文本 → 提取 JSON 对象。 */
+  private async runJsonSession(input: DecomposeSessionInput, label: string): Promise<DecomposeResult> {
     try {
       const handle = await this.createAgent(input, undefined)
       try {
@@ -80,7 +107,7 @@ export class DshSessionAdapter implements SessionAdapter {
         const text = lastAssistantText(handle.agent.session)
         const json = extractJsonObject(text)
         if (json === undefined) {
-          return { kind: 'failed', error: `拆解会话未产出 JSON（最后输出：${text.slice(0, 200)}）` }
+          return { kind: 'failed', error: `${label}会话未产出 JSON（最后输出：${text.slice(0, 200)}）` }
         }
         return { kind: 'ok', output: json }
       } finally {
@@ -94,12 +121,14 @@ export class DshSessionAdapter implements SessionAdapter {
   async runExecutionSession(input: ExecutionSessionInput): Promise<ExecutionOutcome> {
     try {
       const handle = await this.createAgent(input, input.tools)
+      this.liveSessions.set(input.sessionId, handle.agent.session)
       try {
         await handle.agent.whenIdle().catch(() => undefined)
         handle.agent.followup(this.buildMessage(input.prompt))
         await handle.agent.whenIdle()
         return { kind: 'completed' }
       } finally {
+        this.liveSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
       }
     } catch (error) {
@@ -110,7 +139,8 @@ export class DshSessionAdapter implements SessionAdapter {
   /** 重启接管：resume 既有会话并重新注册工具面，等待其收敛。 */
   async adoptSession(input: ExecutionSessionInput): Promise<ExecutionOutcome> {
     try {
-      const selection = this.options.defaultModelSelection?.()
+      // 模型选择：会话输入自带（全局设置）优先，缺省回退宿主默认。
+      const selection = input.model ?? this.options.defaultModelSelection?.()
       const handle = await this.services.agents.resume({
         resumeSessionId: asSessionId(input.sessionId),
         ...(selection !== undefined ? { agentOptions: agentOptionsOf(selection) } : {}),
@@ -125,12 +155,15 @@ export class DshSessionAdapter implements SessionAdapter {
           }
           if (selection !== undefined) installModelSelection(agentCtx, selection)
           registerTaskflowTools(agentCtx, input.tools, input.sessionId)
+          registerApprovalAnswerer(agentCtx, input)
         },
       } as unknown as Parameters<AdapterServices['agents']['resume']>[0])
+      this.liveSessions.set(input.sessionId, handle.agent.session)
       try {
         await handle.agent.whenIdle()
         return { kind: 'completed' }
       } finally {
+        this.liveSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
       }
     } catch (error) {
@@ -169,7 +202,9 @@ export class DshSessionAdapter implements SessionAdapter {
     input: DecomposeSessionInput | ExecutionSessionInput,
     tools: ExecutionSessionInput['tools'] | undefined,
   ): Promise<ReturnType<AdapterServices['agents']['create']>> {
-    const selection = this.options.defaultModelSelection?.()
+    // 模型选择：会话输入自带（全局设置两槽，§PLAN-MODEL）优先，缺省回退宿主默认模型
+    // （无它提示词组装缺 {{model}} 变量，turn 即报错）。
+    const selection = input.model ?? this.options.defaultModelSelection?.()
     const workspace = input.workspace.trim().length > 0 ? input.workspace : this.options.defaultWorkspace
     if (workspace.trim().length > 0 && !isDirectory(workspace)) {
       throw new Error(`工作区不存在或不是目录：${workspace}（fail-closed，§7.2）`)
@@ -195,7 +230,6 @@ export class DshSessionAdapter implements SessionAdapter {
         ...(workspace.trim().length > 0 ? { cwd: workspace } : {}),
         ...(presetId !== null && presetId !== undefined && presetId.trim().length > 0 ? { agentPreset: presetId } : {}),
       },
-      // 模型选择：宿主默认模型（无它提示词组装缺 {{model}} 变量，turn 即报错）。
       ...(selection !== undefined ? { agentOptions: agentOptionsOf(selection) } : {}),
       setup: async (agentCtx: Context) => {
         // 预设挂载（§7.2）：pins.presetId 为空 → 宿主默认预设。
@@ -221,6 +255,7 @@ export class DshSessionAdapter implements SessionAdapter {
         }
         if (tools !== undefined) {
           registerTaskflowTools(agentCtx, tools, input.sessionId)
+          if (isExecutionInput(input)) registerApprovalAnswerer(agentCtx, input)
         }
       },
     })
@@ -340,4 +375,32 @@ export function extractJsonObject(text: string): unknown {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** 输入是否为执行会话（携带执行模式与审批桥）。 */
+function isExecutionInput(input: DecomposeSessionInput | ExecutionSessionInput): input is ExecutionSessionInput {
+  return 'executionMode' in input && input.executionMode !== undefined && 'approvals' in input
+}
+
+/**
+ * 提权审批应答方（§7.1b，dsh-acp 同款宿主形态 ctx.on("approval/request")）：
+ * - auto：直接放行（宿主照常落 approval/asked+decided 审计对，零打扰）；
+ * - approval：转引擎审批桥（落库 pending + SSE 通知 + 看板裁决），Promise 挂起直到人裁决。
+ * 不注册 = 落回宿主默认瀑布流（GUI 只应答当前打开的会话 → 后台会话无人应答挂死，即本轮复盘根因）。
+ */
+function registerApprovalAnswerer(agentCtx: Context, input: ExecutionSessionInput): void {
+  if (input.executionMode !== 'auto' && input.executionMode !== 'approval') return
+  const on = agentCtx.on as unknown as (event: string, listener: (...args: never[]) => unknown) => () => void
+  const stop = on('approval/request', ((
+    request: { toolName: string; reason?: string },
+    next: () => Promise<'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'>,
+  ) => {
+    void next
+    if (input.executionMode === 'auto') return 'allowed-once'
+    return input.approvals
+      .request({ sessionId: input.sessionId, toolName: request.toolName, reason: request.reason })
+      .then(decision => (decision === 'allowed' ? 'allowed-once' : 'rejected'))
+      .catch(() => 'rejected')
+  }) as (...args: never[]) => unknown)
+  void stop
 }

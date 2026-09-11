@@ -43,6 +43,18 @@ export interface Task {
   permissionConfirmed: boolean
   /** 拆解会话 transcript 引用（复盘用）。 */
   decomposeSessionIds: string[]
+  /** 工具提权审批记录（按任务截断保留最近 50 条，NFR-05 风格）。 */
+  approvals?: ApprovalRecord[]
+  /**
+   * 任务级终检证据（2026-09-11 语义升级）：全部子任务完成后由终检会话产出，
+   * 对照「任务级验收标准」逐条核验整体交付——这是人工终批的判定面；
+   * 子任务证据自此降级为过程举证。undefined = 未终检（存量任务/终检未完成）。
+   */
+  evidence?: Evidence
+  /** 进行中的终检会话 id（完成/失败/兜底后清除；boot 时不跨重启）。 */
+  finalizeSessionId?: string
+  /** 进行中的打回定位（triage）会话 id（返工范围应用后清除）。 */
+  triageSessionId?: string
 }
 
 export interface Contract {
@@ -62,6 +74,38 @@ export interface Pins {
   presetId: string | null
   /** 权限 id，如 "read-only" | "workspace-write"。 */
   permission: string
+  /**
+   * 执行模式（提权策略，§7.1b）：auto = 提权自动放行（完全权限）；
+   * approval = 提权转人工审批（需要审批）。缺省按 permission 推导
+   * （见 {@link resolveExecutionMode}，兼容无此字段的旧任务）。
+   */
+  executionMode?: ExecutionMode
+}
+
+/** 执行模式：决定会话内工具提权请求（approval/request）的归宿。 */
+export type ExecutionMode = 'auto' | 'approval'
+
+/** 执行模式推导：显式声明优先；旧数据按 permission 相对默认档推导。 */
+export function resolveExecutionMode(pins: Pins, defaultPermission: string): ExecutionMode {
+  if (pins.executionMode !== undefined) return pins.executionMode
+  return pins.permission === defaultPermission ? 'approval' : 'auto'
+}
+
+/** 一次工具提权审批请求（会话内 approval/request 的落库留痕与看板裁决对象）。 */
+export interface ApprovalRecord {
+  /** ap_<随机>。 */
+  id: string
+  subtaskId: string
+  sessionId: string
+  /** 发起审批的工具名，如 "write"。 */
+  toolName: string
+  /** 宿主给出的提权理由（如 "escalate sandbox to workspace-write: …"）。 */
+  reason?: string
+  status: 'pending' | 'allowed' | 'elevated' | 'rejected' | 'expired'
+  createdAt: number
+  decidedAt?: number
+  /** 裁决批语（可选）。 */
+  note?: string
 }
 
 export interface AcceptanceItem {
@@ -171,6 +215,57 @@ export interface SubtaskEvent {
 export interface EventRefs {
   subtaskId?: string
   sessionId?: string
+  /** 会话模型标签（如 `deepseek/deepseek-chat·high`；留痕用，未配置 = 宿主默认）。 */
+  model?: string
+}
+
+// —— 模型选择（全局设置，非任务数据；§PLAN-MODEL）——
+
+/** 会话的模型选择（同宿主 agentDefaultModel 的选择形态）。 */
+export interface SessionModelSelection {
+  /** 已注册的 provider 路由。 */
+  provider: string
+  /** provider 侧模型 id。 */
+  model: string
+  reasoningEffort?: string
+}
+
+/**
+ * 全局模型设置：两槽正交（拆解 = 规划会话，执行 = 子任务会话）。
+ * null = 跟随宿主默认模型（存量行为显式化，默认值）。
+ */
+export interface ModelSettings {
+  decompose: SessionModelSelection | null
+  execution: SessionModelSelection | null
+}
+
+// —— 模型目录（/api/taskflow/models 载荷；host 自 ctx.llm 结构性投影）——
+
+export interface ModelCatalogEffort {
+  id: string
+  name: string
+}
+
+export interface ModelCatalogModel {
+  id: string
+  name: string
+  /** 仅部分模型暴露可选推理力度。 */
+  reasoning?: {
+    efforts: ModelCatalogEffort[]
+    defaultEffort?: string
+  }
+}
+
+export interface ModelCatalogGroup {
+  id: string
+  name: string
+  models: ModelCatalogModel[]
+}
+
+export interface ModelCatalog {
+  /** 宿主当前默认选择（「跟随宿主默认」项的展示数据）。 */
+  default: SessionModelSelection | null
+  groups: ModelCatalogGroup[]
 }
 
 // —— 状态枚举 ——

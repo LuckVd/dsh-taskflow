@@ -23,6 +23,8 @@ export type TaskflowAction =
   | ArchiveTaskAction
   | RetryBlockedAction
   | RaiseMaxRoundsAction
+  | DecideApprovalAction
+  | GenerateTaskEvidenceAction
 
 export interface CreateTaskAction {
   type: 'createTask'
@@ -31,7 +33,7 @@ export interface CreateTaskAction {
   description: string
   acceptance?: Array<{ text: string }>
   objective?: string
-  pins?: Partial<{ workspace: string; presetId: string | null; permission: string }>
+  pins?: Partial<{ workspace: string; presetId: string | null; permission: string; executionMode: import('./types.ts').ExecutionMode }>
   autoStart?: boolean
   /** 创建后立即触发拆解（默认 true，对应 T2 的自动形态）。 */
   autoDecompose?: boolean
@@ -50,7 +52,7 @@ export interface UpdateContractAction {
   taskId: string
   objective?: string
   acceptance?: Array<{ id?: string; text: string }>
-  pins?: Partial<{ workspace: string; presetId: string | null; permission: string }>
+  pins?: Partial<{ workspace: string; presetId: string | null; permission: string; executionMode: import('./types.ts').ExecutionMode }>
   autoStart?: boolean
 }
 
@@ -82,7 +84,11 @@ export interface RejectSubtaskAction {
   type: 'rejectSubtask'
   requestId: string
   taskId: string
-  /** 默认 = selfCheck 含 partial/fail 的子任务（§4.6）。 */
+  /**
+   * 显式指定返工范围（API 高级路径）。缺省 = AI 定位（triage 会话把批语映射到
+   * 返工集合，适配器不支持或定位失败时回退全量）——人只对任务合同负责，
+   * 不选子任务（§4.6 2026-09-11 语义）。
+   */
   subtaskIds?: string[]
   /** 打回批语，必填，原文注入下一轮执行。 */
   comment: string
@@ -122,6 +128,24 @@ export interface RaiseMaxRoundsAction {
   maxRounds: number | null
 }
 
+export interface DecideApprovalAction {
+  type: 'decideApproval'
+  requestId: string
+  taskId: string
+  approvalId: string
+  /** allow = 完全放行（会话预设提升，后续不再逐次询问）；reject = 仅拒这一次调用。 */
+  decision: 'allow' | 'reject'
+  /** 裁决批语（可选，留痕）。 */
+  note?: string
+}
+
+/** 手动补跑任务级终检（存量任务进 review 时无终检证据；FR-07 2026-09-11 语义）。 */
+export interface GenerateTaskEvidenceAction {
+  type: 'generateTaskEvidence'
+  requestId: string
+  taskId: string
+}
+
 export type ActionOfType<T extends TaskflowAction['type']> = Extract<TaskflowAction, { type: T }>
 
 /** 合法 action 类型白名单（§6：封闭集合）。 */
@@ -138,6 +162,8 @@ export const ACTION_TYPES: ReadonlySet<string> = new Set<TaskflowAction['type']>
   'archiveTask',
   'retryBlocked',
   'raiseMaxRounds',
+  'decideApproval',
+  'generateTaskEvidence',
 ])
 
 /** action 校验错误（不含宿主内部信息，可安全回给浏览器）。 */
@@ -246,6 +272,18 @@ export function validateActionShape(action: unknown): TaskflowAction {
       validateMaxRounds(action.maxRounds, { optional: false })
       return rest as unknown as RaiseMaxRoundsAction
     }
+    case 'decideApproval': {
+      requireString(action.taskId, 'taskId', { max: 128 })
+      requireString(action.approvalId, 'approvalId', { max: 128 })
+      if (action.decision !== 'allow' && action.decision !== 'reject') {
+        throw new ActionFormatError('decision must be "allow" or "reject".')
+      }
+      if (action.note !== undefined) requireString(action.note, 'note', { max: 500, allowEmpty: true })
+      return rest as unknown as DecideApprovalAction
+    }
+    case 'generateTaskEvidence':
+      requireString(action.taskId, 'taskId', { max: 128 })
+      return rest as unknown as GenerateTaskEvidenceAction
   }
 }
 
@@ -273,9 +311,12 @@ function validatePinsInput(value: unknown, opts: { optional: boolean }): void {
     return
   }
   if (!isObject(value)) throw new ActionFormatError('pins must be an object.')
-  const allowed = new Set(['workspace', 'presetId', 'permission'])
+  const allowed = new Set(['workspace', 'presetId', 'permission', 'executionMode'])
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new ActionFormatError(`pins.${key} is not allowed.`)
+  }
+  if (value.executionMode !== undefined && value.executionMode !== 'auto' && value.executionMode !== 'approval') {
+    throw new ActionFormatError('pins.executionMode must be "auto" or "approval".')
   }
   if (value.workspace !== undefined) {
     const ws = requireString(value.workspace, 'pins.workspace', { max: 4096 })

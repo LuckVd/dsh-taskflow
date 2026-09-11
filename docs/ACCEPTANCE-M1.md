@@ -29,7 +29,7 @@
 | FR-05 | 执行引擎（每子任务一会话、注入合同、进度回写） | ✅ | `runSubtaskSession` + `renderExecutionPrompt`（§4.4 模板逐字实现）；`taskflow_update_progress` 便签入事件流；会话 id 记录 `sessionIds[]` |
 | FR-06 | 完成证明三要素（Host 强制） | ✅ | `parseEvidenceInput` + `normalizeEvidence`（verification ≥1、selfCheck 与 acceptance 等长逐条、8KiB 截断）；缺项拒收并回结构化修正提示，不转状态。测试：协议 6 项 + 引擎「证据缺项被拒」 |
 | FR-07 | 人工验收门（批准/打回批语必填） | ✅ | `approveSubtask`/`approveTask`/`rejectSubtask`（批语必填在 action 层校验）；审查页渲染证据报告卡（变更摘要/验证输出可展开/逐条对照并排）——jsdom 断言 |
-| FR-08 | 迭代循环（批语注入、轮次计数、上限） | ✅ | 打回 → S5（review→rejected→in-progress）+ round+1 + 批语原文注入下一轮提示词；maxRounds 默认 3；达限 T7′ blocked → raiseMaxRounds + retryBlocked 恢复。测试：「打回：批语注入 round+1 轮次上限」全链路 |
+| FR-08 | 迭代循环（批语注入、轮次计数、上限） | ✅ | 打回 → S5（review→rejected→in-progress）+ round+1 + 批语原文注入下一轮提示词；maxRounds 默认**不限**（可显式设 [1,99] 作防失控开关）；达限 T7′ blocked → raiseMaxRounds + retryBlocked 恢复。测试：「打回：批语注入 round+1 轮次上限」全链路 |
 | FR-09 | 状态历史（事件溯源、时间线） | ✅ | 一切状态变化必经 `transitionTask/transitionSubtask` 落事件（actor/from/to/reason/refs）；时间线 = 任务级+子任务级合并倒序（view.ts `mergedTimeline`）；E2E 断言完整转移序列与批语原文 |
 | FR-10 | 看板视图（四列+受阻标红+搜索过滤） | ✅ | `boardGroups`（blocked 回原列标红：有子任务→实现中列，拆解受阻→待办列）；搜索覆盖标题/描述/子任务；待验收角标。视图模型 9 项测试 + DOM 断言 |
 | FR-11 | 任务详情抽屉五区 | ✅ | 合同/子任务/验收/历史/拆解记录 五 tab（jsdom 断言）；`ai-refined` 对照视图 |
