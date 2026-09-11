@@ -178,7 +178,6 @@ export function mountNotificationLayer(
 function syncEntry(): void {
   const button = entryButton
   if (button === null) return
-  button.classList.toggle('tf-side-active', boardOpen)
   button.setAttribute('aria-pressed', boardOpen ? 'true' : 'false')
   const label = button.querySelector('[data-tf-entry-label]')
   if (label !== null) label.textContent = boardOpen ? '返回会话' : '任务看板'
@@ -212,6 +211,10 @@ function findSidebarColumn(from: Element): HTMLElement | null {
  * 宿主侧栏 shell 自有 brand 行与「新会话」按钮、不设该位置槽位，故以
  * 文本/aria 锚点定位；侧栏重渲染后自动重新锚定；折叠 rail 形态按锚点
  * 是否带文本自适应图标态；长时间找不到锚点则退化为右下角浮动入口。
+ *
+ * 2026-09-12：入口按钮 className **复刻宿主「新会话」的根类**（取首个 token，
+ * 组件级唯一），尺寸/间距/圆角/字体与宿主 nav 完全一致（含 rail 折叠态）；
+ * .tf-side-entry 仅为兜底与激活高亮（aria-pressed 自管）。
  */
 function installSidebarEntry(toggle: () => void): () => void {
   let container: HTMLDivElement | null = null
@@ -220,7 +223,7 @@ function installSidebarEntry(toggle: () => void): () => void {
   let attempts = 0
   let disposed = false
 
-  const findAnchor = (): { parent: Element; before: Element; wide: boolean } | null => {
+  const findAnchor = (): { parent: Element; before: Element; wide: boolean; hostClass: string } | null => {
     for (const button of Array.from(document.querySelectorAll('button'))) {
       const text = (button.textContent ?? '').trim()
       const labelled = button.getAttribute('aria-label') ?? button.title ?? ''
@@ -228,7 +231,8 @@ function installSidebarEntry(toggle: () => void): () => void {
       const isRail = labelled === '新会话' || labelled === 'New Session'
       if (!isRow && !isRail) continue
       if (button.parentElement === null) continue
-      return { parent: button.parentElement, before: button, wide: isRow }
+      const first = (button.className.trim().split(/\s+/)[0] ?? '').trim()
+      return { parent: button.parentElement, before: button, wide: isRow, hostClass: first }
     }
     return null
   }
@@ -241,18 +245,21 @@ function installSidebarEntry(toggle: () => void): () => void {
     syncEntry()
   }
 
-  const apply = (found: { parent: Element; before: Element; wide: boolean }): void => {
+  const apply = (found: { parent: Element; before: Element; wide: boolean; hostClass: string }): void => {
     if (container === null) {
       container = document.createElement('div')
       entryButton = document.createElement('button')
       entryButton.type = 'button'
-      entryButton.className = 'tf-side-row'
       entryButton.setAttribute('aria-pressed', 'false')
       entryButton.addEventListener('click', toggle)
       container.appendChild(entryButton)
     }
     if (container.parentElement !== found.parent || container.nextElementSibling !== found.before) {
       found.parent.insertBefore(container, found.before)
+    }
+    // 复刻宿主 nav 根类（外观完全一致）；tf-side-entry 只做行为与兜底
+    if (entryButton !== null) {
+      entryButton.className = found.hostClass === '' ? 'tf-side-entry' : `tf-side-entry ${found.hostClass}`
     }
     sidebarColumn = findSidebarColumn(found.before)
     placeLayer() // 看板开着时重锚定：左边界立刻跟随新捕获的侧栏列
@@ -265,8 +272,6 @@ function installSidebarEntry(toggle: () => void): () => void {
       }
     })
     observer.observe(found.parent, { childList: true })
-    entryButton?.classList.toggle('tf-side-rail', !found.wide)
-    entryButton?.classList.toggle('tf-side-row', found.wide)
     render(found.wide)
   }
 

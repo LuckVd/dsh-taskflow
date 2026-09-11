@@ -57,6 +57,11 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 批量归档（2026-09-12）：选择模式 + 勾选（仅可归档状态）+ 二次确认后逐个归档
+  const [batchMode, setBatchMode] = useState(false)
+  const [batchSelected, setBatchSelected] = useState<Record<string, boolean>>({})
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchConfirm, setBatchConfirm] = useState(false)
   const refreshSeq = useRef(0)
   // 全局通知栏「去处理」→ 打开对应任务的抽屉并高亮审批卡（focus.ts 模块级存储）
   const focus = useSyncExternalStore(subscribeBoardFocus, getBoardFocus)
@@ -95,6 +100,24 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
     },
     [transport, refresh],
   )
+
+  /** 批量归档（2026-09-12）：客户端循环 dispatch archiveTask（引擎无批量 action，
+   *  复用单任务守卫与留痕；一次 refresh 汇总）。 */
+  const archiveMany = useCallback(async (): Promise<void> => {
+    const ids = Object.keys(batchSelected).filter(id => batchSelected[id])
+    if (ids.length === 0) return
+    setBatchBusy(true)
+    const results = await Promise.all(ids.map(id => dispatch({ type: 'archiveTask', taskId: id } as never)))
+    setBatchBusy(false)
+    setBatchConfirm(false)
+    setBatchMode(false)
+    setBatchSelected({})
+    void refresh()
+    const failed = results.filter(r => !r.ok).length
+    if (failed > 0) setLoadError(`${failed} 项归档失败（其余已归档）。`)
+  }, [batchSelected, dispatch, refresh])
+
+  const batchCount = Object.values(batchSelected).filter(Boolean).length
 
   const tasks = state?.ledger.tasks ?? []
   const filtered = useMemo(() => filterTasks(tasks, { query, status: statusFilter }), [tasks, query, statusFilter])
@@ -164,7 +187,28 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           </button>
           {settingsOpen && <ModelSettingsPopover transport={transport} onClose={() => setSettingsOpen(false)} />}
         </span>
+        <button type="button" className={`tf-btn${batchMode ? ' tf-btn-primary' : ''}`} aria-pressed={batchMode} onClick={() => setBatchMode(mode => !mode)}>
+          {batchMode ? '退出批量' : '批量归档'}
+        </button>
         <button type="button" className="tf-btn tf-btn-primary" onClick={() => setCreateOpen(true)}>+ 新建任务</button>
+        {batchMode && (
+          <span className="tf-batchbar" role="region" aria-label="批量归档">
+            <span className="count">已选 {batchCount} 项</span>
+            {batchConfirm ? (
+              <>
+                <span>归档后不可恢复，确认归档 {batchCount} 项？</span>
+                <button type="button" className="tf-btn tf-btn-primary" disabled={batchBusy || batchCount === 0} onClick={() => void archiveMany()}>{batchBusy ? '归档中…' : '确认归档'}</button>
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => setBatchConfirm(false)}>再想想</button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="tf-btn tf-btn-danger" disabled={batchBusy || batchCount === 0} onClick={() => setBatchConfirm(true)}>归档所选</button>
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => { setBatchMode(false); setBatchSelected({}) }}>取消</button>
+              </>
+            )}
+            <span className="tf-hint">仅「已完成 / 已取消」可勾选归档</span>
+          </span>
+        )}
         {onClose !== undefined && (
           <button type="button" className="tf-btn" onClick={onClose} aria-label="返回会话">✕ 返回会话</button>
         )}
@@ -185,7 +229,15 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
               </header>
               <div className="tf-column-cards">
                 {group.cards.map(card => (
-                  <TaskCard key={card.task.id} card={card} onOpen={() => setSelectedId(card.task.id)} />
+                  <TaskCard
+                    key={card.task.id}
+                    card={card}
+                    onOpen={() => setSelectedId(card.task.id)}
+                    batchMode={batchMode}
+                    selected={batchSelected[card.task.id] ?? false}
+                    onToggleSelect={() => setBatchSelected(sel => ({ ...sel, [card.task.id]: !(sel[card.task.id] ?? false) }))}
+                    onArchive={async taskId => { await dispatch({ type: 'archiveTask', taskId } as never) }}
+                  />
                 ))}
                 {group.cards.length === 0 && <div className="tf-column-empty">暂无任务</div>}
               </div>
@@ -216,20 +268,109 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
 
 // —— 卡片 ——
 
-function TaskCard({ card, onOpen }: { card: CardSummary; onOpen: () => void }): JSX.Element {
+/** 可归档状态（已完成列：done / cancelled；2026-09-12 卡片归档入口仅对这些出现）。 */
+function isArchivable(status: Task['status']): boolean {
+  return status === 'done' || status === 'cancelled'
+}
+
+function TaskCard({
+  card,
+  onOpen,
+  batchMode,
+  selected,
+  onToggleSelect,
+  onArchive,
+}: {
+  card: CardSummary
+  onOpen: () => void
+  batchMode: boolean
+  selected: boolean
+  onToggleSelect: () => void
+  onArchive: (taskId: string) => Promise<void>
+}): JSX.Element {
   const { task } = card
   const blocked = task.status === 'blocked'
   const running = task.status === 'decomposing' || task.status === 'in-progress'
+  const archivable = isArchivable(task.status)
+  // 卡片归档（2026-09-12）：两段式确认，避免误归档
+  const [confirmArchive, setConfirmArchive] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+
+  const activate = (): void => {
+    if (batchMode) onToggleSelect()
+    else onOpen()
+  }
+  const handleArchive = async (): Promise<void> => {
+    setArchiving(true)
+    try {
+      await onArchive(task.id)
+    } finally {
+      setArchiving(false)
+      setConfirmArchive(false)
+    }
+  }
+
+  const cardClass = `tf-card${archivable ? ' has-actions' : ''}${batchMode ? ' tf-batch' : ''}`
   return (
-    <button
-      type="button"
-      role="listitem"
-      className="tf-card"
+    <div
+      role="button"
+      tabIndex={0}
+      className={cardClass}
       data-status={task.status}
-      onClick={onOpen}
+      onClick={activate}
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          activate()
+        }
+      }}
       title={task.description !== '' ? task.description : task.title}
       aria-label={`打开任务 ${task.title}`}
     >
+      {batchMode && (
+        <input
+          type="checkbox"
+          className="tf-card-check"
+          checked={selected}
+          disabled={!archivable}
+          aria-label={`选择任务 ${task.title}`}
+          onClick={event => event.stopPropagation()}
+          onChange={() => { if (archivable) onToggleSelect() }}
+        />
+      )}
+      {!batchMode && archivable && (
+        <span className="tf-card-actions">
+          {confirmArchive ? (
+            <>
+              <button
+                type="button"
+                className="tf-card-mini primary"
+                disabled={archiving}
+                onClick={event => { event.stopPropagation(); void handleArchive() }}
+              >
+                {archiving ? '归档中…' : '确认归档'}
+              </button>
+              <button
+                type="button"
+                className="tf-card-mini"
+                disabled={archiving}
+                onClick={event => { event.stopPropagation(); setConfirmArchive(false) }}
+              >
+                取消
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="tf-card-mini"
+              title="归档任务（需确认；归档后在看板隐藏，可在时间线/详情留痕）"
+              onClick={event => { event.stopPropagation(); setConfirmArchive(true) }}
+            >
+              归档
+            </button>
+          )}
+        </span>
+      )}
       <span className="tf-card-title">{task.title}</span>
       {task.description !== '' && <span className="tf-card-desc">{task.description}</span>}
       <span className="tf-progress" role="img" aria-label={`进度 ${card.doneCount}/${card.totalCount}`}>
@@ -255,7 +396,7 @@ function TaskCard({ card, onOpen }: { card: CardSummary; onOpen: () => void }): 
         )}
         <span className="tf-time">{relativeTime(card.lastActivity)}</span>
       </span>
-    </button>
+    </div>
   )
 }
 

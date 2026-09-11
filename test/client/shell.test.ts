@@ -16,6 +16,7 @@ function buildShell(): void {
   const side = document.createElement('div')
   side.className = 'side'
   const newSession = document.createElement('button')
+  newSession.className = 'nav-item-test' // 模拟宿主 nav 根类（入口应复刻它）
   newSession.textContent = '新会话'
   side.appendChild(newSession)
   const center = document.createElement('div')
@@ -74,10 +75,14 @@ describe('宿主壳层集成面（会话切换 + 降级）', () => {
     expect(listeners).toHaveLength(0)
   })
 
-  it('无 sessions 服务的宿主：apply 照常完成入口安装', () => {
+  it('无 sessions 服务的宿主：apply 照常完成入口安装，且入口复刻宿主 nav 根类（2026-09-12）', () => {
     buildShell()
     const { ctx } = fakeEffectCollector()
     expect(() => clientApply({ ...ctx } as MinimalClientContext)).not.toThrow()
-    expect(document.querySelector('.tf-side-row')).toBeTruthy()
+    const entry = document.querySelector('.tf-side-entry')
+    expect(entry).toBeTruthy()
+    // 外观类与宿主「新会话」一致（尺寸/间距/圆角随宿主 nav-item）
+    expect(entry!.classList.contains('nav-item-test')).toBe(true)
+    expect(entry!.textContent).toContain('任务看板')
   })
 })

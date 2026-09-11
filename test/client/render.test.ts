@@ -389,5 +389,44 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(doc.querySelector('[data-testid="deliverables"]')!.textContent).toContain('交付物（1）')
     // 验收页未默认打开（验收页专注验收，done 后不再进）
     expect(doc.querySelector('.tf-task-head')).toBeNull()
+
+    // —— 2026-09-12：卡片归档（需确认）与批量归档 ——
+    // 关闭弹窗回看板
+    ;(doc.querySelector('.tf-modal-head button') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-modal') === null)
+    const doneCard2 = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('产出交付物演示任务'))
+    expect(doneCard2).toBeTruthy()
+    // 单卡归档：右上角「归档」→ 出现「确认归档 / 取消」→ 先点「取消」恢复
+    const archiveBtn = [...doc.querySelectorAll('button')].find(b => b.textContent === '归档' && b.closest('.tf-card') !== null)
+    expect(archiveBtn).toBeTruthy()
+    ;(archiveBtn as HTMLElement).click()
+    await waitFor(() => [...doc.querySelectorAll('button')].some(b => b.textContent === '取消' && b.closest('.tf-card') !== null))
+    const cancelBtn = [...doc.querySelectorAll('button')].find(b => b.textContent === '取消' && b.closest('.tf-card') !== null)
+    expect(cancelBtn).toBeTruthy()
+    ;(cancelBtn as HTMLElement).click()
+    await waitFor(() => [...doc.querySelectorAll('button')].some(b => b.textContent === '归档' && b.closest('.tf-card') !== null))
+    // 批量归档：进入选择模式 → 勾选 done 卡 → 「归档所选」→ 确认 → 任务 archived、卡片消失
+    const batchBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批量归档'))
+    expect(batchBtn).toBeTruthy()
+    ;(batchBtn as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-batchbar') !== null)
+    const dlvCard3 = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('产出交付物演示任务'))
+    expect(dlvCard3).toBeTruthy()
+    const check = (dlvCard3 as HTMLElement).querySelector('.tf-card-check') as HTMLInputElement
+    expect(check).toBeTruthy()
+    expect(check.disabled).toBe(false)
+    check.click()
+    await waitFor(() => (doc.querySelector('.tf-batchbar')!.textContent ?? '').includes('已选 1 项'))
+    const archSelBtn = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('归档所选'))
+    expect(archSelBtn).toBeTruthy()
+    expect((archSelBtn as HTMLButtonElement).disabled).toBe(false)
+    ;(archSelBtn as HTMLElement).click()
+    await waitFor(() => (doc.querySelector('.tf-batchbar')!.textContent ?? '').includes('确认归档 1 项？'))
+    const confirmBatch = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('确认归档'))
+    ;(confirmBatch as HTMLElement).click()
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === deliverable.taskId)?.status === 'archived')
+    // archived 不在主视图：等 UI 刷新后卡片消失、批量条退出（SSE→refresh 有竞态，轮询）
+    await waitFor(() => ![...doc.querySelectorAll('.tf-card')].some(el => el.textContent?.includes('产出交付物演示任务')))
+    await waitFor(() => doc.querySelector('.tf-batchbar') === null)
   })
 })

@@ -106,13 +106,29 @@ export const TASKFLOW_CSS = `
 .tf-columns .tf-card { flex: none; }
 
 /* —— 卡片（白卡 + 左侧状态色条）—— */
-.tf-card { position: relative; text-align: left; width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 10px 15px; border-radius: 8px; border: none; background: ${V.bgBase}; color: ${V.label}; box-shadow: ${V.shadow1}; transition: box-shadow 120ms ease; }
+.tf-card { position: relative; text-align: left; width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 10px 15px; border-radius: 8px; border: none; background: ${V.bgBase}; color: ${V.label}; box-shadow: ${V.shadow1}; cursor: pointer; transition: box-shadow 120ms ease; }
 .tf-card:hover { box-shadow: ${V.shadow2}; }
 .tf-card::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 999px; background: ${V.caption}; opacity: 0.6; }
 .tf-card[data-status='decomposing']::before, .tf-card[data-status='in-progress']::before { background: ${V.warn}; opacity: 1; }
 .tf-card[data-status='review']::before { background: ${V.business}; opacity: 1; }
 .tf-card[data-status='blocked']::before { background: ${V.error}; opacity: 1; }
 .tf-card[data-status='done']::before { background: ${V.success}; opacity: 1; }
+/* —— 卡片操作（2026-09-12）：右上角归档（需确认）+ 批量选择模式 —— */
+.tf-card-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; z-index: 1; }
+.tf-card-mini { height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; color: ${V.label2}; background: ${V.bgLayer2}; transition: background-color 120ms ease, color 120ms ease; }
+.tf-card-mini:hover:not(:disabled) { background: ${V.bgHover}; color: ${V.label}; }
+.tf-card-mini:disabled { opacity: 0.5; cursor: default; }
+.tf-card-mini.danger { color: ${V.errorSecondary}; }
+.tf-card-mini.danger:hover:not(:disabled) { background: ${V.bgHoverDanger}; }
+.tf-card-mini.primary { color: ${V.business}; background: ${V.businessTertiary}; }
+.tf-card-mini.primary:hover:not(:disabled) { background: ${V.bgHover}; color: ${V.business}; }
+/* 右上角操作存在时标题让位，避免被按钮压住 */
+.tf-card.has-actions .tf-card-title, .tf-card.has-actions .tf-card-desc { padding-right: 74px; }
+.tf-card-check { position: absolute; top: 10px; left: 10px; z-index: 1; width: 15px; height: 15px; accent-color: ${V.business}; cursor: pointer; margin: 0; }
+.tf-card.tf-batch { padding-left: 30px; }
+/* 批量操作条（工具栏下方，选择模式出现） */
+.tf-batchbar { display: flex; align-items: center; gap: 10px; flex-basis: 100%; padding: 8px 0 2px; font-size: 12.5px; color: ${V.label2}; }
+.tf-batchbar .count { font-weight: 700; color: ${V.label}; font-variant-numeric: tabular-nums; }
 .tf-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-desc { font-size: 12px; line-height: 1.45; color: ${V.label2}; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: ${V.label2}; flex-wrap: wrap; min-height: 18px; }
@@ -342,15 +358,16 @@ export const TASKFLOW_CSS = `
 .tf-count-anim { animation: tf-pulse 360ms ease; }
 @keyframes tf-pulse { 50% { transform: scale(1.08); } }
 
-/* —— 侧栏顶部入口（sidebar 锚点注入；形态对齐宿主 nav-item）—— */
-.tf-side-row { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: none; border-radius: 8px; background: transparent; color: ${V.label2}; cursor: pointer; font-size: 13px; white-space: nowrap; font-family: inherit; transition: background-color 120ms ease, color 120ms ease; }
-.tf-side-row:hover { background: ${V.bgHover}; color: ${V.label}; }
-.tf-side-row:focus-visible { outline: 2px solid ${V.business}; outline-offset: 2px; }
+/* —— 侧栏顶部入口（sidebar 锚点注入；形态对齐宿主 nav-item）——
+ * 2026-09-12：入口 className 直接跟随宿主「新会话」按钮（installSidebarEntry
+ * 复刻宿主类），尺寸/间距/圆角/字体与宿主 nav 完全一致；.tf-side-entry 仅作
+ * 宿主类缺失时的兜底 + 激活高亮自管（aria-pressed，不依赖宿主 active 类）。 */
+.tf-side-entry { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: none; border-radius: 8px; background: transparent; color: ${V.label2}; cursor: pointer; font-size: 13px; white-space: nowrap; font-family: inherit; transition: background-color 120ms ease, color 120ms ease; }
+.tf-side-entry:hover { background: ${V.bgHover}; color: ${V.label}; }
+.tf-side-entry:focus-visible { outline: 2px solid ${V.business}; outline-offset: 2px; }
+.tf-side-entry[aria-pressed='true'] { background: ${V.navActive}; color: ${V.label}; box-shadow: inset 3px 0 0 0 ${V.navAccent}; }
+.tf-side-entry[aria-pressed='true'] .tf-side-icon { color: ${V.navAccent}; }
 .tf-side-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; flex: none; }
-.tf-side-rail { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 8px; background: transparent; color: ${V.label2}; cursor: pointer; transition: background-color 120ms ease, color 120ms ease; }
-.tf-side-rail:hover { background: ${V.bgHover}; color: ${V.label}; }
-.tf-side-rail:focus-visible { outline: 2px solid ${V.business}; outline-offset: 2px; }
-.tf-side-active { background: ${V.navActive}; color: ${V.label}; box-shadow: inset 3px 0 0 0 ${V.navAccent}; }
 
 /* —— 看板层（shell.overlay 占用者）：只覆盖中栏，左边界由 JS 对齐侧栏 —— */
 /* 看板层 = body 级 fixed 屏蔽层（不经 shell.overlay——那是一层 z-index:20
