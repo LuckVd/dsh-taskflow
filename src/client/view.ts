@@ -54,7 +54,10 @@ export function cardSummary(task: Task): CardSummary {
   let awaitingHuman: CardSummary['awaitingHuman']
   if (approvalPending) awaitingHuman = 'approval'
   else if (task.status === 'review') awaitingHuman = 'review'
-  else if (task.events.some(e => e.kind === 'awaiting-permission-confirm')) awaitingHuman = 'permission'
+  // 权限确认要看「当前状态」，不是事件历史：awaiting-permission-confirm 是留痕（历史事实），
+  // 确认过/已终态的任务即使事件里留过痕也不再等待（真机 2026-09-12：done 任务卡片仍显示
+  // 「执行需确认」——合法性 = in-progress 且权限位未置真）。
+  else if (task.status === 'in-progress' && !task.permissionConfirmed) awaitingHuman = 'permission'
   else if (task.status === 'blocked') awaitingHuman = 'blocked'
   else if (task.status === 'draft') awaitingHuman = 'decompose'
   return {

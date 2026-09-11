@@ -317,3 +317,39 @@ describe('模型留痕视图（§PLAN-MODEL）', () => {
     expect(modelForSession(sub, 'tfs_missing')).toBeUndefined()
   })
 })
+
+describe('卡片 awaitingHuman：权限确认只看当前状态（2026-09-12 真机回归）', () => {
+  /** 含一次历史确权等待事件的任务。 */
+  function mkTaskWithAwaitingEvent(overrides: Partial<Task> = {}): Task {
+    return mkTask({
+      events: [
+        { id: 'e1', at: 100, from: null, to: 'draft', actor: 'human' },
+        { id: 'e2', at: 200, from: 'draft', to: 'in-progress', actor: 'system' },
+        { id: 'e3', at: 300, from: 'in-progress', to: 'in-progress', actor: 'system', kind: 'awaiting-permission-confirm' },
+        { id: 'e4', at: 400, from: 'in-progress', to: 'in-progress', actor: 'human', kind: 'permission-confirmed' },
+        { id: 'e5', at: 500, from: 'in-progress', to: 'done', actor: 'human' },
+      ],
+      ...overrides,
+    })
+  }
+
+  it('已终态（done）任务：即使事件史留过 await 痕，也不显示「执行需确认」', () => {
+    const card = cardSummary(mkTaskWithAwaitingEvent({ status: 'done', permissionConfirmed: true }))
+    expect(card.awaitingHuman).toBeUndefined()
+  })
+
+  it('review 态任务：await 痕不干扰「待验收」提示', () => {
+    const card = cardSummary(mkTaskWithAwaitingEvent({ status: 'review', permissionConfirmed: true }))
+    expect(card.awaitingHuman).toBe('review')
+  })
+
+  it('真正在等确认（in-progress 且未确认）才显示「执行需确认」', () => {
+    const card = cardSummary(mkTaskWithAwaitingEvent({ status: 'in-progress', permissionConfirmed: false }))
+    expect(card.awaitingHuman).toBe('permission')
+  })
+
+  it('in-progress 但已确认过：不再显示「执行需确认」', () => {
+    const card = cardSummary(mkTaskWithAwaitingEvent({ status: 'in-progress', permissionConfirmed: true }))
+    expect(card.awaitingHuman).toBeUndefined()
+  })
+})
