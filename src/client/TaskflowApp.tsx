@@ -30,12 +30,13 @@ import { renderBlocks } from './MarkdownView.tsx'
 import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
-type TabId = 'contract' | 'subtasks' | 'review' | 'history' | 'decompose'
+type TabId = 'contract' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
 
 const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
   { id: 'contract', title: '合同' },
   { id: 'subtasks', title: '子任务' },
   { id: 'review', title: '验收' },
+  { id: 'deliverables', title: '产物' },
   { id: 'history', title: '历史' },
   { id: 'decompose', title: '拆解记录' },
 ]
@@ -459,9 +460,9 @@ function DetailModal({
   onRefresh: () => Promise<void>
   transport: TaskflowTransport
 }): JSX.Element {
-  // 默认落点：review = 等终批看判定；done = 验收完成重点看产物与验收结果（2026-09-12）；
-  // 其余状态从合同看起。
-  const [tab, setTab] = useState<TabId>(task.status === 'review' || task.status === 'done' ? 'review' : 'contract')
+  // 默认落点（2026-09-12 口径）：review = 等终批，落验收页（验收页专注验收）；done =
+  // 验收完成，落「产物」页（不用再进验收页翻产物）；其余状态从合同看起。
+  const [tab, setTab] = useState<TabId>(task.status === 'review' ? 'review' : task.status === 'done' ? 'deliverables' : 'contract')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
@@ -519,6 +520,7 @@ function DetailModal({
           {tab === 'contract' && <ContractTab task={task} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} />}
+          {tab === 'deliverables' && <DeliverablesTab task={task} transport={transport} />}
           {tab === 'history' && <HistoryTab task={task} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
         </div>
@@ -823,7 +825,6 @@ function ReviewTab({
   const [procOpen, setProcOpen] = useState(false)
   const [openSubId, setOpenSubId] = useState<string | null>(null)
   const inReview = task.subtasks.filter(s => s.status === 'review')
-  const done = task.status === 'done'
   const canReject = inReview.length > 0
   const atLimit = task.maxRounds !== null && task.round + 1 > task.maxRounds
   const acceptance = task.contract.acceptance
@@ -851,10 +852,6 @@ function ReviewTab({
               <CheckBadge passed={taskStats.passed} total={taskStats.total} />
             )}
           </div>
-          {/* done 态产物第一眼：交付物提到结论带之前（验收完重点看产物，不用翻） */}
-          {done && (taskEvidence?.artifacts?.length ?? 0) > 0 && (
-            <ArtifactsBlock artifacts={taskEvidence?.artifacts ?? []} previewArtifact={previewArtifact} />
-          )}
           {taskEvidence !== undefined && taskStats.total > 0 && (
             <VerdictBanner
               passed={taskStats.passed}
@@ -871,7 +868,6 @@ function ReviewTab({
               evidence={taskEvidence}
               headExtra={<span className="tf-chip tf-chip-mono">AI 终检</span>}
               previewArtifact={previewArtifact}
-              hideArtifacts={done}
             />
           ) : finalizing ? (
             <span className="tf-hint">AI 终检中：正在对照任务级验收标准核验整体交付；完成后进入人工终批——你不需要逐个看子任务。</span>
@@ -1030,7 +1026,6 @@ function EvidenceView({
   status,
   headExtra,
   previewArtifact,
-  hideArtifacts = false,
 }: {
   title: string
   acceptance: AcceptanceItem[]
@@ -1040,8 +1035,6 @@ function EvidenceView({
   headExtra?: JSX.Element
   /** 交付物预览口（§4.5b）；缺省 = 只展示声明不提供预览。 */
   previewArtifact?: (path: string) => Promise<ArtifactPreview>
-  /** 交付物区块已被调用方前置渲染（done 态判定面首屏），此处不再重复。 */
-  hideArtifacts?: boolean
 }): JSX.Element {
   const stats = checkStatsOf(acceptance, evidence)
   const checkById = new Map(evidence.selfCheck.map(check => [check.acceptanceId, check]))
@@ -1051,7 +1044,7 @@ function EvidenceView({
   const summaryLong = evidence.changesSummary.length > 160
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [openVerify, setOpenVerify] = useState<Record<number, boolean>>({})
-  const hasArtifacts = (evidence.artifacts?.length ?? 0) > 0 && !hideArtifacts
+  const hasArtifacts = (evidence.artifacts?.length ?? 0) > 0
 
   return (
     <article className="tf-ev">
@@ -1248,7 +1241,7 @@ type PreviewState =
   | { phase: 'error'; message: string }
   | { phase: 'done'; data: ArtifactPreview }
 
-/** 交付物区块（产物清单 + 只读预览）。终检卡内与 done 态判定面首屏共用。 */
+/** 交付物区块（产物清单 + 只读预览）。终检卡内与产物页共用。 */
 function ArtifactsBlock({
   artifacts,
   previewArtifact,
@@ -1272,6 +1265,33 @@ function ArtifactsBlock({
           onToggle={() => setOpen(map => ({ ...map, [artifact.path]: !(map[artifact.path] ?? false) }))}
         />
       ))}
+    </div>
+  )
+}
+
+/** 产物页（2026-09-12）：任务级交付物独立成页——验收完成（done）后默认落点。
+ *  验收页专注验收；产物不在验收里翻。口径同 §4.5b：只收录验收人终审要看的最终产物。 */
+function DeliverablesTab({ task, transport }: { task: Task; transport: TaskflowTransport }): JSX.Element {
+  const previewArtifact = useCallback(
+    (path: string) => transport.getArtifactPreview(task.id, path),
+    [transport, task.id],
+  )
+  const artifacts = task.evidence?.artifacts ?? []
+  return (
+    <div className="tf-section">
+      <span className="tf-section-title">产物（任务级交付物{artifacts.length > 0 ? ` · ${artifacts.length}` : ''}）</span>
+      {artifacts.length === 0 ? (
+        <span className="tf-hint">
+          {task.evidence === undefined
+            ? '尚无任务级终检产物。（存量任务未跑终检，可到验收页「补跑 AI 终检」后回来看。）'
+            : '终检未声明文件交付物。'}
+        </span>
+      ) : (
+        <>
+          <ArtifactsBlock artifacts={artifacts} previewArtifact={previewArtifact} />
+          <span className="tf-hint">产物由任务级终检声明（§4.5b 口径：只收录验收人终审要看的最终产物）；预览只读，≤256KiB 截断。</span>
+        </>
+      )}
     </div>
   )
 }

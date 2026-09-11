@@ -140,10 +140,12 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(tabs.join(',')).toContain('拆解记录')
 
     // 子任务标签
-    ;(doc.querySelector('.tf-tab:nth-child(2)') as HTMLElement).click()
+    const subtasksTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('子任务'))
+    ;(subtasksTab as HTMLElement).click()
     await waitFor(() => doc.querySelectorAll('.tf-item').length >= 2)
     // 验收标签（2026-09-11 语义）：任务级判定面优先 + 子任务降级为过程举证折叠附录
-    ;(doc.querySelector('.tf-tab:nth-child(3)') as HTMLElement).click()
+    const reviewTab2 = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('验收'))
+    ;(reviewTab2 as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-task-head') !== null)
     expect(doc.querySelector('.tf-task-head')!.textContent).toContain('任务验收')
     // 任务级终检证据卡（引擎自动产出）在前，验证记录默认折叠 → 点行头展开看输出
@@ -187,7 +189,9 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
   it('第二轮执行后回到待验收；时间线含打回批语', async () => {
     await waitFor(() => engine.getState().ledger.tasks[0]!.status === 'review')
     const doc = dom.window.document
-    ;(doc.querySelector('.tf-tab:nth-child(4)') as HTMLElement).click()
+    const historyTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('历史'))
+    expect(historyTab).toBeTruthy()
+    ;(historyTab as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-timeline') !== null)
     const text = doc.querySelector('.tf-timeline')!.textContent ?? ''
     expect(text).toContain('人')
@@ -365,29 +369,25 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(approveBtn).toBeTruthy()
     ;(approveBtn as HTMLElement).click()
     await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === deliverable.taskId)?.status === 'done')
-    // 关闭弹窗回看板，重开同一张卡（approve 后 SSE 刷新看板，卡片节点已被重渲染，需重新查询）
+    // 关闭弹窗回看板（approve 后 SSE 刷新看板，卡片节点已被重渲染，需重新查询）
     ;(doc.querySelector('.tf-modal-head button') as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-modal') === null)
+    // 等 UI 同步 done（看板卡片状态刷新）后再重开弹窗：默认 tab 的计算基于任务最新状态，
+    // 若未同步就重开，会按旧状态（review）落验收页
+    await waitFor(() => {
+      const c = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('产出交付物演示任务'))
+      return c?.dataset.status === 'done'
+    })
     const doneCard = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('产出交付物演示任务'))
     expect(doneCard).toBeTruthy()
     ;(doneCard as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-modal') !== null)
-    await waitFor(() => doc.querySelector('.tf-task-head') !== null)
-    // 默认 tab 即「验收」（done 任务不再从合同页看起）
+    // 默认 tab 即「产物」页：验收完成（done）不再进验收页，产物独立成页第一眼可见
+    await waitFor(() => doc.querySelector('[data-testid="deliverables"]') !== null)
     const activeTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.getAttribute('aria-selected') === 'true')
-    expect(activeTab?.textContent).toContain('验收')
-    // 交付物在结论带之前：产物是 done 任务的第一眼内容
-    // （approve 后 SSE→onRefresh 的 UI 同步有竞态，轮询直到该顺序稳定成立；
-    //  顺序成立本身就意味着 done 态的前置产物区已渲染）
-    await waitFor(() => {
-      const nodes = [...doc.querySelectorAll('.tf-modal-body .tf-artifacts, .tf-modal-body .tf-banner2')]
-      const d = nodes.findIndex(n => n.classList.contains('tf-artifacts'))
-      const b = nodes.findIndex(n => n.classList.contains('tf-banner2'))
-      return d >= 0 && b >= 0 && d < b
-    })
-    const dlv2 = doc.querySelector('[data-testid="deliverables"]')!
-    const banner = doc.querySelector('.tf-banner2')
-    expect(banner).toBeTruthy()
-    expect(dlv2.textContent).toContain('交付物（1）')
+    expect(activeTab?.textContent).toContain('产物')
+    expect(doc.querySelector('[data-testid="deliverables"]')!.textContent).toContain('交付物（1）')
+    // 验收页未默认打开（验收页专注验收，done 后不再进）
+    expect(doc.querySelector('.tf-task-head')).toBeNull()
   })
 })
