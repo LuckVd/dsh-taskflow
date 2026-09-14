@@ -58,11 +58,15 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 批量归档（2026-09-12）：选择模式 + 勾选（仅可归档状态）+ 二次确认后逐个归档
+  // 批量操作（2026-09-12 归档 → 2026-09-15 FR-14 扩展批量验收）：选择模式 +
+  // 勾选（待验收 / 可归档状态）+ 二次确认后逐个 dispatch（复用单任务守卫与留痕）
   const [batchMode, setBatchMode] = useState(false)
   const [batchSelected, setBatchSelected] = useState<Record<string, boolean>>({})
   const [batchBusy, setBatchBusy] = useState(false)
-  const [batchConfirm, setBatchConfirm] = useState(false)
+  /** 待确认的动作（null = 未在确认步）：archive / approve / reject。 */
+  const [batchConfirm, setBatchConfirm] = useState<'archive' | 'approve' | 'reject' | null>(null)
+  /** 批量打回的共用批语（US-07：打回强制批语，注入每个任务的下一轮迭代）。 */
+  const [batchComment, setBatchComment] = useState('')
   const refreshSeq = useRef(0)
   // 全局通知栏「去处理」→ 打开对应任务的抽屉并高亮审批卡（focus.ts 模块级存储）
   const focus = useSyncExternalStore(subscribeBoardFocus, getBoardFocus)
@@ -103,20 +107,48 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   )
 
   /** 批量归档（2026-09-12）：客户端循环 dispatch archiveTask（引擎无批量 action，
-   *  复用单任务守卫与留痕；一次 refresh 汇总）。 */
-  const archiveMany = useCallback(async (): Promise<void> => {
-    const ids = Object.keys(batchSelected).filter(id => batchSelected[id])
+   *  复用单任务守卫与留痕；一次 refresh 汇总）。2026-09-15 起只作用于可归档子集。 */
+  const archiveMany = useCallback(async (ids: string[]): Promise<void> => {
     if (ids.length === 0) return
     setBatchBusy(true)
     const results = await Promise.all(ids.map(id => dispatch({ type: 'archiveTask', taskId: id } as never)))
     setBatchBusy(false)
-    setBatchConfirm(false)
+    setBatchConfirm(null)
     setBatchMode(false)
     setBatchSelected({})
     void refresh()
     const failed = results.filter(r => !r.ok).length
     if (failed > 0) setLoadError(`${failed} 项归档失败（其余已归档）。`)
-  }, [batchSelected, dispatch, refresh])
+  }, [dispatch, refresh])
+
+  /** 批量通过（FR-14）：review 任务逐个 approveTask（任务级终批 → done）。 */
+  const approveMany = useCallback(async (ids: string[]): Promise<void> => {
+    if (ids.length === 0) return
+    setBatchBusy(true)
+    const results = await Promise.all(ids.map(id => dispatch({ type: 'approveTask', taskId: id } as never)))
+    setBatchBusy(false)
+    setBatchConfirm(null)
+    setBatchMode(false)
+    setBatchSelected({})
+    void refresh()
+    const failed = results.filter(r => !r.ok).length
+    if (failed > 0) setLoadError(`${failed} 项通过失败（其余已通过）。`)
+  }, [dispatch, refresh])
+
+  /** 批量打回（FR-14）：共用批语逐个 rejectSubtask（不点名范围，走 AI triage 定位返工）。 */
+  const rejectMany = useCallback(async (ids: string[], comment: string): Promise<void> => {
+    if (ids.length === 0 || comment.trim().length === 0) return
+    setBatchBusy(true)
+    const results = await Promise.all(ids.map(id => dispatch({ type: 'rejectSubtask', taskId: id, comment } as never)))
+    setBatchBusy(false)
+    setBatchConfirm(null)
+    setBatchComment('')
+    setBatchMode(false)
+    setBatchSelected({})
+    void refresh()
+    const failed = results.filter(r => !r.ok).length
+    if (failed > 0) setLoadError(`${failed} 项打回失败（其余已打回）。`)
+  }, [dispatch, refresh])
 
   const batchCount = Object.values(batchSelected).filter(Boolean).length
 
@@ -126,6 +158,9 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const reviewCount = reviewBadgeCount(tasks)
   const approvalCount = pendingApprovalCount(tasks)
   const selected = tasks.find(t => t.id === selectedId) ?? null
+  // 按当前账本状态划分选择集（动作只作用于各自可用子集；状态在批量期间可能已变化）
+  const selectedReviewIds = tasks.filter(t => batchSelected[t.id] === true && t.status === 'review').map(t => t.id)
+  const selectedArchivableIds = tasks.filter(t => batchSelected[t.id] === true && isArchivable(t.status)).map(t => t.id)
 
   return (
     <div className="tf-root tf-board" role="application" aria-label="taskflow 看板">
@@ -189,25 +224,53 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           {settingsOpen && <ModelSettingsPopover transport={transport} onClose={() => setSettingsOpen(false)} />}
         </span>
         <button type="button" className={`tf-btn${batchMode ? ' tf-btn-primary' : ''}`} aria-pressed={batchMode} onClick={() => setBatchMode(mode => !mode)}>
-          {batchMode ? '退出批量' : '批量归档'}
+          {batchMode ? '退出批量' : '批量操作'}
         </button>
         <button type="button" className="tf-btn tf-btn-primary" onClick={() => setCreateOpen(true)}>+ 新建任务</button>
         {batchMode && (
-          <span className="tf-batchbar" role="region" aria-label="批量归档">
-            <span className="count">已选 {batchCount} 项</span>
-            {batchConfirm ? (
+          <span className="tf-batchbar" role="region" aria-label="批量操作">
+            <span className="count">已选 {batchCount} 项{selectedReviewIds.length + selectedArchivableIds.length !== batchCount ? '（含状态已变化项，按可用动作执行）' : ''}</span>
+            {batchConfirm === 'archive' ? (
               <>
-                <span>归档后不可恢复，确认归档 {batchCount} 项？</span>
-                <button type="button" className="tf-btn tf-btn-primary" disabled={batchBusy || batchCount === 0} onClick={() => void archiveMany()}>{batchBusy ? '归档中…' : '确认归档'}</button>
-                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => setBatchConfirm(false)}>再想想</button>
+                <span>归档后不可恢复，确认归档 {selectedArchivableIds.length} 项？</span>
+                <button type="button" className="tf-btn tf-btn-primary" disabled={batchBusy || selectedArchivableIds.length === 0} onClick={() => void archiveMany(selectedArchivableIds)}>{batchBusy ? '归档中…' : '确认归档'}</button>
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => setBatchConfirm(null)}>再想想</button>
+              </>
+            ) : batchConfirm === 'approve' ? (
+              <>
+                <span>通过即完成验收（done），确认通过 {selectedReviewIds.length} 项？</span>
+                <button type="button" className="tf-btn tf-btn-primary" disabled={batchBusy || selectedReviewIds.length === 0} onClick={() => void approveMany(selectedReviewIds)}>{batchBusy ? '通过中…' : '确认通过'}</button>
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => setBatchConfirm(null)}>再想想</button>
+              </>
+            ) : batchConfirm === 'reject' ? (
+              <>
+                <span>打回 {selectedReviewIds.length} 项，批语将注入各自的下一轮迭代：</span>
+                <input
+                  className="tf-input tf-batch-comment"
+                  value={batchComment}
+                  onChange={event => setBatchComment(event.target.value)}
+                  placeholder="打回原因（必填）"
+                  aria-label="批量打回批语"
+                  maxLength={4000}
+                />
+                <button type="button" className="tf-btn tf-btn-danger" disabled={batchBusy || selectedReviewIds.length === 0 || batchComment.trim().length === 0} onClick={() => void rejectMany(selectedReviewIds, batchComment)}>{batchBusy ? '打回中…' : '确认打回'}</button>
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => { setBatchConfirm(null); setBatchComment('') }}>再想想</button>
               </>
             ) : (
               <>
-                <button type="button" className="tf-btn tf-btn-danger" disabled={batchBusy || batchCount === 0} onClick={() => setBatchConfirm(true)}>归档所选</button>
-                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => { setBatchMode(false); setBatchSelected({}) }}>取消</button>
+                {selectedReviewIds.length > 0 && (
+                  <button type="button" className="tf-btn tf-btn-primary" disabled={batchBusy} onClick={() => setBatchConfirm('approve')}>通过所选（{selectedReviewIds.length}）</button>
+                )}
+                {selectedReviewIds.length > 0 && (
+                  <button type="button" className="tf-btn tf-btn-danger" disabled={batchBusy} onClick={() => setBatchConfirm('reject')}>打回所选（{selectedReviewIds.length}）</button>
+                )}
+                {selectedArchivableIds.length > 0 && (
+                  <button type="button" className="tf-btn tf-btn-danger" disabled={batchBusy} onClick={() => setBatchConfirm('archive')}>归档所选（{selectedArchivableIds.length}）</button>
+                )}
+                <button type="button" className="tf-btn" disabled={batchBusy} onClick={() => { setBatchMode(false); setBatchSelected({}); setBatchComment('') }}>取消</button>
               </>
             )}
-            <span className="tf-hint">仅「已完成 / 已取消」可勾选归档</span>
+            <span className="tf-hint">可勾选：待验收（通过/打回）· 已完成/已取消（归档）</span>
           </span>
         )}
         {onClose !== undefined && (
@@ -274,6 +337,11 @@ function isArchivable(status: Task['status']): boolean {
   return status === 'done' || status === 'cancelled'
 }
 
+/** 批量可勾选状态（2026-09-15 FR-14）：待验收（通过/打回）+ 可归档（归档）。 */
+function isBatchSelectable(status: Task['status']): boolean {
+  return status === 'review' || isArchivable(status)
+}
+
 function TaskCard({
   card,
   onOpen,
@@ -293,13 +361,17 @@ function TaskCard({
   const blocked = task.status === 'blocked'
   const running = task.status === 'decomposing' || task.status === 'in-progress'
   const archivable = isArchivable(task.status)
+  const batchSelectable = isBatchSelectable(task.status)
   // 卡片归档（2026-09-12）：两段式确认，避免误归档
   const [confirmArchive, setConfirmArchive] = useState(false)
   const [archiving, setArchiving] = useState(false)
 
   const activate = (): void => {
-    if (batchMode) onToggleSelect()
-    else onOpen()
+    if (batchMode) {
+      if (batchSelectable) onToggleSelect()
+    } else {
+      onOpen()
+    }
   }
   const handleArchive = async (): Promise<void> => {
     setArchiving(true)
@@ -333,10 +405,10 @@ function TaskCard({
           type="checkbox"
           className="tf-card-check"
           checked={selected}
-          disabled={!archivable}
+          disabled={!batchSelectable}
           aria-label={`选择任务 ${task.title}`}
           onClick={event => event.stopPropagation()}
-          onChange={() => { if (archivable) onToggleSelect() }}
+          onChange={() => { if (batchSelectable) onToggleSelect() }}
         />
       )}
       {!batchMode && archivable && (

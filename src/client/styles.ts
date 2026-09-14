@@ -127,8 +127,10 @@ export const TASKFLOW_CSS = `
 .tf-card-check { position: absolute; top: 10px; left: 10px; z-index: 1; width: 15px; height: 15px; accent-color: ${V.business}; cursor: pointer; margin: 0; }
 .tf-card.tf-batch { padding-left: 30px; }
 /* 批量操作条（工具栏下方，选择模式出现） */
-.tf-batchbar { display: flex; align-items: center; gap: 10px; flex-basis: 100%; padding: 8px 0 2px; font-size: 12.5px; color: ${V.label2}; }
+.tf-batchbar { display: flex; align-items: center; gap: 10px; flex-basis: 100%; padding: 8px 0 2px; font-size: 12.5px; color: ${V.label2}; flex-wrap: wrap; }
 .tf-batchbar .count { font-weight: 700; color: ${V.label}; font-variant-numeric: tabular-nums; }
+/* 批量打回批语输入（FR-14）：复用 .tf-input 视觉，这里只管布局（窄屏自然换行） */
+.tf-batch-comment { flex: 1 1 220px; min-width: 180px; max-width: 420px; min-height: 24px; padding: 4px 8px; }
 .tf-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-desc { font-size: 12px; line-height: 1.45; color: ${V.label2}; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: ${V.label2}; flex-wrap: wrap; min-height: 18px; }

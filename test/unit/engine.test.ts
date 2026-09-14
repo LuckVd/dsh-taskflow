@@ -717,6 +717,9 @@ describe('调度健康与权限门（2026-09-10 真机事故回归）', () => {
       const taskA = await createOneWordTask(first.engine)
       await waitFor(() => first.adapter.executionRuns.length >= 1)
       await first.engine.dispatch({ type: 'cancelTask', requestId: 'req-cancel', taskId: taskA, confirm: true })
+      // 先停掉一阶段引擎再改文件：残留的 fire-and-forget 会话完成时会以「改写前的
+      // 内存账本」再落一次盘，把手工构造的孤儿形态覆盖掉（负载高时的偶发竞态）。
+      await first.engine.dispose()
       const ledgerPath = path.join(dir, 'ledger.json')
       const raw = JSON.parse(await readFile(ledgerPath, 'utf8'))
       for (const sub of raw.tasks[0].subtasks) {
@@ -805,8 +808,9 @@ describe('调度健康与权限门（2026-09-10 真机事故回归）', () => {
       // 人工确认后放行
       const confirm = await engine.dispatch({ type: 'startImplementation', requestId: 'req-confirm', taskId: apprId, confirmPermission: true })
       expect(confirm.ok).toBe(true)
-      let __probeN = 0
-      await waitFor(() => { const t = taskOf(engine, apprId); __probeN += 1; if (__probeN % 100 === 0) console.log('[P]', t.status, t.subtasks.map(s => `${s.status}:${s.sessionId ? 'sid' : '-'}`).join(','), 'pc', t.permissionConfirmed, 'live', [...(engine as unknown as { liveExecutionSessions: Set<string> }).liveExecutionSessions].map(s => s.slice(8, 30)), 'auto', statusOf(engine, autoId)()); return t.subtasks.some(s => s.status === 'in-progress' && s.sessionId !== undefined) })
+      // 检测信号用持久的 sessionIds 落号（与孤儿回归测试同款）：mock 秒交证据，
+      // in-progress+sessionId 是瞬态，负载高时轮询只看得到 review（2026-09-15 偶发超时根因）。
+      await waitFor(() => taskOf(engine, apprId).subtasks.some(s => s.sessionIds.length > 0))
     } finally {
       await cleanup(dir)
     }

@@ -417,7 +417,7 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     ;(cancelBtn as HTMLElement).click()
     await waitFor(() => [...doc.querySelectorAll('button')].some(b => b.textContent === '归档' && b.closest('.tf-card') !== null))
     // 批量归档：进入选择模式 → 勾选 done 卡 → 「归档所选」→ 确认 → 任务 archived、卡片消失
-    const batchBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批量归档'))
+    const batchBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批量操作'))
     expect(batchBtn).toBeTruthy()
     ;(batchBtn as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-batchbar') !== null)
@@ -439,5 +439,73 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     // archived 不在主视图：等 UI 刷新后卡片消失、批量条退出（SSE→refresh 有竞态，轮询）
     await waitFor(() => ![...doc.querySelectorAll('.tf-card')].some(el => el.textContent?.includes('产出交付物演示任务')))
     await waitFor(() => doc.querySelector('.tf-batchbar') === null)
+  })
+
+  it('FR-14 批量验收：勾选待验收卡 → 批量通过（done）；批量打回（批语必填注入迭代）', async () => {
+    const doc = dom.window.document
+    // 种子任务（给计算器…）自第二轮起停在 review；前面用例未动它的终态
+    const seed = engine.getState().ledger.tasks.find(t => t.title.includes('给计算器'))
+    expect(seed?.status).toBe('review')
+
+    // —— 批量通过 ——
+    await waitFor(() => [...doc.querySelectorAll('button')].some(b => b.textContent?.includes('批量操作')))
+    const batchBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批量操作'))
+    ;(batchBtn as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-batchbar') !== null)
+    const seedCard = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('给计算器'))
+    const seedCheck = (seedCard as HTMLElement).querySelector('.tf-card-check') as HTMLInputElement
+    expect(seedCheck.disabled).toBe(false) // review 可勾选（FR-14）
+    seedCheck.click()
+    await waitFor(() => (doc.querySelector('.tf-batchbar')!.textContent ?? '').includes('已选 1 项'))
+    const approveSel = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('通过所选'))
+    expect(approveSel).toBeTruthy()
+    ;(approveSel as HTMLElement).click()
+    await waitFor(() => (doc.querySelector('.tf-batchbar')!.textContent ?? '').includes('确认通过 1 项'))
+    const confirmApprove = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('确认通过'))
+    ;(confirmApprove as HTMLElement).click()
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === seed!.id)?.status === 'done')
+    await waitFor(() => doc.querySelector('.tf-batchbar') === null)
+
+    // —— 批量打回 ——
+    // 恢复默认执行行为（上一用例的审批挂起行为不能再触发），再种一个 review 任务
+    adapter.executionBehavior = undefined
+    const created = await engine.dispatch({
+      type: 'createTask',
+      requestId: 'ui-batch-reject',
+      title: '批量打回演示任务',
+      description: '被打回后带批语重跑。',
+    })
+    expect(created.ok).toBe(true)
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.status === 'review')
+
+    const batchBtn2 = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('批量操作'))
+    ;(batchBtn2 as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-batchbar') !== null)
+    // 等卡片以 review 态出现在看板（引擎到 review 与 DOM 刷新之间有竞态，勾选框要先可用）
+    await waitFor(() => {
+      const card = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('批量打回演示任务'))
+      const check = card?.querySelector('.tf-card-check') as HTMLInputElement | null
+      return check !== null && !check.disabled
+    })
+    const rejectCard = [...doc.querySelectorAll('.tf-card')].find(el => el.textContent?.includes('批量打回演示任务'))!
+    ;(rejectCard.querySelector('.tf-card-check') as HTMLInputElement).click()
+    await waitFor(() => (doc.querySelector('.tf-batchbar')!.textContent ?? '').includes('已选 1 项'))
+    const rejectSel = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('打回所选'))
+    ;(rejectSel as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-batch-comment') !== null)
+    const confirmReject = [...doc.querySelectorAll('.tf-batchbar button')].find(b => b.textContent?.includes('确认打回'))
+    expect((confirmReject as HTMLButtonElement).disabled).toBe(true) // 批语为空禁用（US-07）
+    const nativeInputSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
+    const commentInput = doc.querySelector('.tf-batch-comment') as HTMLInputElement
+    nativeInputSetter.call(commentInput, '边界用例覆盖不足，补充后重跑')
+    commentInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    await waitFor(() => !(confirmReject as HTMLButtonElement).disabled)
+    ;(confirmReject as HTMLElement).click()
+    // 打回 → round+1，回到实现中并再次收敛到 review（mock 全过）
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.round === 2)
+    await waitFor(() => engine.getState().ledger.tasks.find(t => t.id === created.taskId)?.status === 'review')
+    // 批语留痕（triage 打回事件原文）
+    const reworked = engine.getState().ledger.tasks.find(t => t.id === created.taskId)!
+    expect(reworked.subtasks.some(s => s.history.some(e => e.reason?.includes('边界用例覆盖不足')))).toBe(true)
   })
 })
