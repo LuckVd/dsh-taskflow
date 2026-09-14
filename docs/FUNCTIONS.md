@@ -302,7 +302,8 @@ type SubtaskStatus =
   - `taskflow.submit_evidence(changesSummary, verification[], selfCheck[])` —— 提交证据；Host 校验 `selfCheck` 与 `acceptance` 逐条对应，缺条拒收；
   - `taskflow.report_blocker(reason)` —— 报障：子任务转 blocked，事件记录；
   - `taskflow.update_progress(note)` —— 进度便签，仅入事件流不转状态。
-- 调度循环：子任务 pending→in-progress 由调度器驱动（依赖就绪 + WIP 未满）；同一任务默认串行（M1），M2 放开 DAG 并行。
+- 调度循环：子任务 pending→in-progress 由调度器驱动。**依赖 DAG 就绪守卫（FR-12，2026-09-15 起默认开）**：直接依赖「产物已存在」（`done` 或 `review`=举证完毕——2026-09-11 语义下子任务不再逐个人批，按 `done` 判定 DAG 必然死锁）才可调度；未知 dep 引用视为未满足（fail-closed）；**前序被打回时下游回退**：返工集沿 deps 传递闭包回退下游——运行中的终止会话（摘存活表+卸看门狗+过期审批+适配器取消）、举证完毕（review）的作废证据重排；`done` 下游不自动作废（人工已批准），任务级留「建议人工复核」提示，传播穿过 done 中间节点继续；未牵连的独立分支不动。plugin config `enforceDeps: false` 仅用于旧数据人工排障。
+- **WIP 并发上限（FR-13，2026-09-15）**：全局设置 `maxConcurrentSubtasks`（1–8，settings.json 持久化，覆盖引擎配置基线默认 1=串行）；提高即改即生效（立即放行排队中的子任务），降低不杀运行中的会话（不再发新车，自然收敛）。队列可视化：子任务列表「等依赖：X / 排队中」chip。
 - 会话意外终止（宿主重启等）：重启恢复时「有会话记录的运行」标记观察、无记录的取消——沿 task-board 已验证的确定性恢复语义。
 
 ### 4.5 完成证明 Evidence（FR-06）
@@ -339,6 +340,7 @@ type SubtaskStatus =
   - 人只给**批语**（必填，原文注入下一轮执行）；**返工范围由 AI 定位**：引擎自动跑 triage 会话（输入 = 批语 + 子任务清单及状态摘要，输出 = `{reworkSubtaskIds, note}`），未点名的子任务保持 review 不重跑；triage 失败/结果无效/为空 → 回退**全量打回**（旧语义兜底）。显式传 `subtaskIds` 仍为 API 高级路径；
   - 动作序列：被点名的子任务 → rejected（落事件：actor=human, reason=批语）→ in-progress 重新入队；task.round+1；任务级证据作废；任务若在 review 则回 in-progress（T7）；全程留痕（`reject` / `rework-scope` 事件）；
   - 达 `maxRounds` 时打回变为「已达迭代上限」：允许「提高上限并打回」（T7′）。
+- **批量验收（FR-14，2026-09-15）**：看板「批量操作」模式可勾选待验收卡（及已完成/已取消卡）——「通过所选（n）」两段式确认后逐个 `approveTask`；「打回所选（n）」用**共用批语**（必填，空批语禁用确认）逐个打回（不点名范围，走 AI triage）；「归档所选（n）」同 2026-09-12 语义。三动作均只作用于各自可用子集（勾选后状态变化不误伤），复用单任务引擎守卫，失败计数入横幅。
 
 ### 4.7 迭代循环（FR-08）
 
@@ -369,6 +371,8 @@ type SubtaskStatus =
 **子任务进度的 §4.6 口径（2026-09-11 下午补）**：卡片「n/m 子任务」与进度条的分子 = `done + review`（§4.6 后子任务不再逐个人验，`review` = 执行举证完毕、随任务终审一并定案）——否则终检就绪的任务卡片会显示「0/12 子任务」，像什么都没做。子任务状态标签 `review` 同步改读「举证完毕」（原「待验收」），消除「子任务也等人验收」的误导。
 
 **全局**：顶部工具条 = 搜索（标题/描述/子任务）、状态过滤、工作区过滤；右上「待验收 n」角标（US-15 的 M1 形态）。
+
+**浏览器通知（FR-16，2026-09-15）**：shell 级常驻 watcher（看板关着也要能响）——SSE 快照 diff 检测「新进 review 的任务」与「新发起的 pending 审批」发系统通知；首帧只建基线不补发；用户 opt-in（工具栏 🔔，偏好存 localStorage，开启时请求权限，denied 给提示）；点击通知 → 聚焦窗口 + 打开看板定位对应任务/审批卡（复用通知栏「去处理」管线）；环境不支持 Notification 时整体退化（角标/通知栏仍是兜底）。
 
 ### 4.10 任务详情弹窗（FR-11）
 
@@ -424,6 +428,9 @@ type SubtaskStatus =
 | `/api/taskflow/state` | GET | 全量带 revision 快照 |
 | `/api/taskflow/events` | GET (SSE) | 推送 revision / 调度 / 通知变化 |
 | `/api/taskflow/action` | POST | 幂等 action 提交（requestId 去重；≤64KiB） |
+| `/api/taskflow/settings` | GET | 全局设置（模型两槽 + `maxConcurrentSubtasks` 并发上限，FR-13；并发返回生效值 = 设置值 ?? 引擎配置） |
+| `/api/taskflow/settings` | PUT | 覆盖全局设置（fail-closed 形状校验；**先落盘后生效**，落盘失败 500 且不改引擎内存——2026-09-15 修复此前只改内存不落盘、重启即失） |
+| `/api/taskflow/models` | GET | 宿主模型目录投影（下拉数据源；未注入提供方 501） |
 | `/api/taskflow/artifact/preview` | GET | 交付物只读预览（§4.5b/§7.4b；query: `taskId` + `path`；只放行该任务证据声明过的路径） |
 
 **Action 联合类型（白名单，无命令/路径/参数类字段）**：
@@ -468,8 +475,8 @@ archiveTask         retryBlocked                    raiseMaxRounds
 | 里程碑 | 功能文档覆盖章节 |
 |---|---|
 | M1 | §2 数据模型 v1、§3 状态机全部 P0 转移、§4.1–4.9、§5、§6、§7、§8 |
-| M2 | §3.1 T7 批量、§4.9 过滤增强、FR-12/13/14/15/16 对应扩展（DAG 调度循环、WIP、批量 action、归档视图、通知通道） |
-| M3 | FR-17–20：触发器注册、AI 预审会话（独立第二会话读证据出建议，不落状态）、模板、报表 |
+| M2 | §3.1 T7 批量、§4.9 过滤增强、FR-12/13/14/15/16 对应扩展——**2026-09-15 全部落地**：DAG 调度守卫与依赖回退（§4.4）、WIP 并发上限与队列可视化（§4.4/§6）、批量验收（§4.6）、归档/搜索（2026-09-12）、通知（角标 + 审批通知栏 + 浏览器通知，§4.9） |
+| M3 | FR-17–20：触发器注册、AI 预审（**口径裁决 2026-09-15：任务级终检（§4.5）已实质覆盖「第二会话独立复核证据、产出建议、不代替人判」——终检会话即独立复核，人终批即最终判定；FR-18 关闭，不再单独实现**）、模板、报表 |
 
 ---
 
