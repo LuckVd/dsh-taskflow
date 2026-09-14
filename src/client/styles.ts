@@ -133,6 +133,23 @@ export const TASKFLOW_CSS = `
 .tf-batch-comment { flex: 1 1 220px; min-width: 180px; max-width: 420px; min-height: 24px; padding: 4px 8px; }
 /* 浏览器通知开关开启态（FR-16）：铃铛描边加粗示意 */
 .tf-notify-on { color: ${V.business}; border-color: ${V.business}; }
+/* 任务模板（FR-19）：创建抽屉顶部的 chip 行 */
+.tf-tpl-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.tf-tpl-chip-wrap { display: inline-flex; align-items: center; gap: 2px; }
+.tf-tpl-chip { min-height: 26px; padding: 2px 10px; font-size: 12.5px; font-weight: 500; color: ${V.label}; background: ${V.bgBase}; border: 1px solid ${V.borderL3}; border-radius: 999px; cursor: pointer; transition: border-color 120ms ease; }
+.tf-tpl-chip:hover { border-color: ${V.business}; }
+.tf-tpl-chip:focus-visible { outline: 2px solid ${V.business}; outline-offset: 1px; }
+.tf-tpl-del { min-width: 20px; min-height: 20px; padding: 0 4px; font-size: 11px; line-height: 1; color: ${V.label3}; background: none; border: none; border-radius: 999px; cursor: pointer; }
+.tf-tpl-del:hover { color: ${V.errorSecondary}; }
+.tf-tpl-del.sure { color: ${V.errorSecondary}; font-weight: 600; }
+.tf-tpl-save { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tf-tpl-save-name { flex: 1 1 180px; max-width: 280px; }
+/* 周期统计浮层（FR-20） */
+.tf-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tf-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: ${V.bgBase}; border: 1px solid ${V.borderL3}; border-radius: 8px; }
+.tf-stat-value { font-size: 18px; font-weight: 700; color: ${V.label}; font-variant-numeric: tabular-nums; }
+.tf-stat-label { font-size: 11.5px; color: ${V.label2}; }
+.tf-stats-notes { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 .tf-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-desc { font-size: 12px; line-height: 1.45; color: ${V.label2}; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: ${V.label2}; flex-wrap: wrap; min-height: 18px; }

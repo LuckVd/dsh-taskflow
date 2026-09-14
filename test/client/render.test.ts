@@ -13,6 +13,7 @@ import type { DispatchResult } from '../../src/host/engine.ts'
 import { LedgerStore } from '../../src/host/ledger.ts'
 import { MockSessionAdapter, buildPassingEvidence } from '../../src/host/mock/session-adapter.ts'
 import { handleTaskflowRequest } from '../../src/host/http.ts'
+import { TemplateStore } from '../../src/host/templates.ts'
 import { cleanup, tempDir, waitFor } from '../helpers.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -50,11 +51,15 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     })
     const { window } = dom
 
-    // fetch → 真实引擎（同款 HTTP 处理器）
+    // fetch → 真实引擎（同款 HTTP 处理器；模板库走真实 TemplateStore）
+    const templateStore = new TemplateStore(path.join(dir, 'templates.json'))
+    await templateStore.load()
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://127.0.0.1:4173')
       const body = init?.body !== undefined ? String(init.body) : undefined
-      const result = await handleTaskflowRequest(engine, init?.method ?? 'GET', url.pathname, body)
+      const result = await handleTaskflowRequest(engine, init?.method ?? 'GET', url.pathname, body, {
+        templates: { get: () => templateStore.get(), update: raw => templateStore.update(raw) },
+      })
       return {
         ok: result.status < 400,
         status: result.status,
@@ -99,6 +104,8 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
       },
       getArtifactPreview: async (taskId: string, artifactPath: string) =>
         engine.readArtifactPreview(taskId, artifactPath),
+      getTemplates: async () => templateStore.get(),
+      saveTemplates: async (next: unknown) => templateStore.update(next) as Promise<never>,
       getModels: async () => ({
         default: { provider: 'deepseek', model: 'deepseek-chat' },
         groups: [
@@ -210,11 +217,54 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     // 执行模式单选（§7.1b）：默认完全权限
     expect(doc.querySelector('[aria-label="执行模式"]')).toBeTruthy()
     expect([...doc.querySelectorAll('.tf-mode-card')].map(el => el.className).join(',')).toContain('active')
+
+    // —— FR-19 模板：种子 chips 出现 → 点「修 Bug」预填描述/验收 → 存为模板 → chip 出现 → 两段式删除 ——
+    await waitFor(() => doc.querySelectorAll('.tf-tpl-chip').length >= 4)
+    const bugChip = [...doc.querySelectorAll('.tf-tpl-chip')].find(el => el.textContent === '修 Bug')
+    ;(bugChip as HTMLElement).click()
+    const nativeAreaSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!
+    await waitFor(() => (doc.querySelector('#tf-desc') as HTMLTextAreaElement).value.includes('复现步骤'))
+    expect((doc.querySelector('#tf-ac') as HTMLTextAreaElement).value).toContain('回归测试')
+    void nativeAreaSetter
+    // 存为模板
+    const saveTplBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('存为模板'))
+    ;(saveTplBtn as HTMLElement).click()
+    await new Promise(r => setTimeout(r, 200))
+    await waitFor(() => doc.querySelector('.tf-tpl-save-name') !== null)
+    const tplName = doc.querySelector('.tf-tpl-save-name') as HTMLInputElement
+    const nativeInputSetter2 = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
+    nativeInputSetter2.call(tplName, '我的检查单')
+    tplName.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    const doSaveTpl = [...doc.querySelectorAll('.tf-tpl-save button')].find(b => b.textContent?.includes('保存模板'))
+    await waitFor(() => !(doSaveTpl as HTMLButtonElement).disabled)
+    ;(doSaveTpl as HTMLElement).click()
+    await waitFor(() => [...doc.querySelectorAll('.tf-tpl-chip')].some(el => el.textContent === '我的检查单'))
+    // 删除该模板：✕ → 「确认删?」→ chip 消失
+    const myWrap = [...doc.querySelectorAll('.tf-tpl-chip-wrap')].find(el => el.querySelector('.tf-tpl-chip')?.textContent === '我的检查单')!
+    ;(myWrap.querySelector('.tf-tpl-del') as HTMLElement).click()
+    await waitFor(() => myWrap.querySelector('.tf-tpl-del.sure') !== null)
+    ;(myWrap.querySelector('.tf-tpl-del.sure') as HTMLElement).click()
+    await waitFor(() => ![...doc.querySelectorAll('.tf-tpl-chip')].some(el => el.textContent === '我的检查单'))
+    // 收起抽屉，还回看板（后续用例从看板起步）
+    ;(doc.querySelector('.tf-drawer-head [aria-label="关闭"]') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-drawer') === null)
+  })
+
+  it('FR-20 周期统计浮层：工具栏入口 → 指标网格出现（含一次通过率与拆解采纳率口径注脚）', async () => {
+    const doc = dom.window.document
+    ;(doc.querySelector('[aria-label="周期统计"]') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-stats-pop') !== null)
+    expect(doc.querySelector('.tf-stats-pop')!.textContent).toContain('一次通过率')
+    expect(doc.querySelector('.tf-stats-pop')!.textContent).toContain('拆解采纳率')
+    expect(doc.querySelector('.tf-stats-pop')!.textContent).toContain('近 7 天完成')
+    expect(doc.querySelectorAll('.tf-stat').length).toBe(8)
+    doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await waitFor(() => doc.querySelector('.tf-stats-pop') === null)
   })
 
   it('审批模式：通知栏条目 + 抽屉审批卡 + 完全放行后流转待验收', async () => {
     const doc = dom.window.document
-    ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement).click()
+    ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement | null)?.click()
     // 挂全局通知栏（bundle 出口同款 API）
     const api = (dom.window as unknown as {
       __taskflowTest: { mountNotificationLayer(root: HTMLElement, transport: unknown, options?: { onOpen?: () => void }): () => void }

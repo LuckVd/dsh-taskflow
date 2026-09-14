@@ -29,6 +29,7 @@ import { DEFAULT_ENGINE_CONFIG, TaskflowEngine } from '../engine.ts'
 import type { EngineConfig } from '../engine.ts'
 import { LedgerStore } from '../ledger.ts'
 import { GlobalSettingsStore } from '../settings.ts'
+import { TemplateStore } from '../templates.ts'
 import { createSseStream, handleTaskflowRequest, isTrustedRequest } from '../http.ts'
 import type { ModelCatalog, ModelCatalogGroup } from '../../protocol/types.ts'
 import { DshSessionAdapter } from './adapter.ts'
@@ -69,14 +70,20 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
   })
   const engine = new TaskflowEngine(new LedgerStore(path.join(dataDir, 'ledger.json')), adapter, engineConfig)
   const settings = new GlobalSettingsStore(path.join(dataDir, 'settings.json'))
+  const templates = new TemplateStore(path.join(dataDir, 'templates.json'))
 
   ctx.effect(() => {
-    // 设置加载失败不阻塞启动：回退默认（两槽 = 跟随宿主），lastLoadError 留排查口
+    // 设置/模板加载失败不阻塞启动：回退默认（两槽 = 跟随宿主 / 内置模板种子）
     void settings
       .load()
       .then(() => engine.setGlobalSettings(settings.get()))
       .catch(error => {
         ctx.logger.warn(`taskflow: settings load failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    void templates
+      .load()
+      .catch(error => {
+        ctx.logger.warn(`taskflow: templates load failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     return () => undefined
   }, 'taskflow.settings()')
@@ -98,6 +105,7 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       table.register({ kind: 'exact', path: '/api/taskflow/events', handler: sseHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/settings', handler: apiHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/models', handler: apiHandler }),
+      table.register({ kind: 'exact', path: '/api/taskflow/templates', handler: apiHandler }),
       // 漏注册 = dsh 路由器直接 404，永远到不了 apiHandler（真机 2026-09-11 事故：交付物预览全挂）
       table.register({ kind: 'exact', path: '/api/taskflow/artifact/preview', handler: apiHandler }),
     ]
@@ -119,6 +127,8 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
         models: buildModelCatalogFrom(ctx),
         // PUT settings 的落盘口（fail-closed：落盘失败不改引擎内存）
         persistSettings: next => settings.update(next),
+        // 模板库读写口（FR-19；PUT 全表先校验后落盘）
+        templates: { get: () => templates.get(), update: raw => templates.update(raw) },
         query: url.searchParams,
       })
       res.writeHead(result.status, result.headers)

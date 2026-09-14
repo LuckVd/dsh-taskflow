@@ -8,6 +8,8 @@
  * - GET  /api/taskflow/settings  全局设置（模型两槽 + 调度并发，§PLAN-MODEL / FR-13）
  * - PUT  /api/taskflow/settings  覆盖全局设置（fail-closed 形状校验；先落盘后生效）
  * - GET  /api/taskflow/models    宿主模型目录投影（下拉数据源；未注入提供方 → 501）
+ * - GET  /api/taskflow/templates 任务模板列表（FR-19；未注入存储 → 501）
+ * - PUT  /api/taskflow/templates 覆盖模板全表（fail-closed 校验；先落盘后生效）
  * - GET  /api/taskflow/artifact/preview?taskId=&path=  交付物只读预览（仅限证据声明过的路径，§7.4b）
  *
  * @module dsh-taskflow/host
@@ -19,6 +21,8 @@ import type { GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import { isArtifactPreviewError } from './artifacts.ts'
 import type { TaskflowEngine } from './engine.ts'
 import { SettingsError, validateGlobalSettings } from './settings.ts'
+import { TemplateError, validateTemplates } from './templates.ts'
+import type { TaskTemplate } from './templates.ts'
 
 export interface HttpResult {
   status: number
@@ -78,6 +82,7 @@ export async function handleTaskflowRequest(
   opts: {
     models?: () => Promise<ModelCatalog>
     persistSettings?: (settings: GlobalSettings) => Promise<unknown>
+    templates?: { get: () => TaskTemplate[]; update: (raw: unknown) => Promise<TaskTemplate[]> }
     query?: URLSearchParams
   } = {},
 ): Promise<HttpResult> {
@@ -136,6 +141,34 @@ export async function handleTaskflowRequest(
       return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(catalog) }
     } catch (error) {
       return jsonError(502, `model catalog load failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if (method === 'GET' && pathname === '/api/taskflow/templates') {
+    if (opts.templates === undefined) return jsonError(501, 'template store is unavailable in this deployment.')
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(opts.templates.get()) }
+  }
+  if (method === 'PUT' && pathname === '/api/taskflow/templates') {
+    if (opts.templates === undefined) return jsonError(501, 'template store is unavailable in this deployment.')
+    if (body === undefined) return jsonError(400, 'request body required (JSON).')
+    const bytes = Buffer.byteLength(body, 'utf8')
+    if (bytes > MAX_ACTION_BYTES) return jsonError(413, `templates exceed ${MAX_ACTION_BYTES} bytes.`)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return jsonError(400, 'request body must be valid JSON.')
+    }
+    try {
+      validateTemplates(parsed)
+    } catch (error) {
+      return jsonError(400, error instanceof TemplateError ? error.message : 'invalid templates shape.')
+    }
+    // 先落盘后生效（fail-closed）：落盘失败不返回新表
+    try {
+      const saved = await opts.templates.update(parsed)
+      return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(saved) }
+    } catch (error) {
+      return jsonError(500, `templates persist failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   if (method === 'GET' && pathname === '/api/taskflow/artifact/preview') {

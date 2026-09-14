@@ -14,6 +14,7 @@ import {
   statusLabel,
   subtaskStatusLabel,
   subtaskWait,
+  reportStats,
 } from '../../src/client/view.ts'
 import type { Subtask, Task } from '../../src/protocol/types.ts'
 
@@ -390,5 +391,65 @@ describe('subtaskWait（排队原因投影）', () => {
 
     const reviewTask = mkTask({ status: 'review', subtasks: [mkSubtask({ status: 'pending' })] })
     expect(subtaskWait(reviewTask, reviewTask.subtasks[0]!)).toBeUndefined()
+  })
+})
+
+// —— 周期统计（FR-20） ——
+
+describe('reportStats（吞吐 / 一次通过率 / 平均迭代轮次 / 拆解采纳率）', () => {
+  const day = 24 * 60 * 60_000
+  const now = 1_000_000_000_000
+
+  function doneTask(overrides: Partial<Task> = {}): Task {
+    return mkTask({
+      status: 'done',
+      events: [
+        { id: 'd1', at: now - 3 * day, from: 'review', to: 'done', actor: 'human' },
+      ],
+      subtasks: [mkSubtask()],
+      ...overrides,
+    })
+  }
+
+  it('空账本：比率与均值为 null（不编造 0%）', () => {
+    const stats = reportStats([], now)
+    expect(stats.doneTotal).toBe(0)
+    expect(stats.firstPassRate).toBeNull()
+    expect(stats.avgRounds).toBeNull()
+    expect(stats.decomposeAdoptionRate).toBeNull()
+  })
+
+  it('吞吐按 done 事件时间分桶；一次通过率 = round=1 占比', () => {
+    const recent = doneTask() // 3 天前 done，round 1
+    const older = doneTask({
+      events: [{ id: 'd2', at: now - 20 * day, from: 'review', to: 'done', actor: 'human' }],
+      round: 2, // 被打回过一次
+    })
+    const stats = reportStats([recent, older], now)
+    expect(stats.doneTotal).toBe(2)
+    expect(stats.doneLast7d).toBe(1)
+    expect(stats.doneLast30d).toBe(2)
+    expect(stats.firstPassRate).toBe(0.5)
+    expect(stats.avgRounds).toBe(1.5)
+    expect(stats.reworkedCount).toBe(1)
+  })
+
+  it('拆解采纳率：未发生 subtasks-edited 的拆解任务占比', () => {
+    const untouched = doneTask()
+    const edited = doneTask({ round: 1, events: [
+      { id: 'd3', at: now - day, from: 'review', to: 'done', actor: 'human' },
+      { id: 'd4', at: now - 2 * day, from: 'in-progress', to: 'in-progress', actor: 'human', kind: 'subtasks-edited' },
+    ] })
+    const stats = reportStats([untouched, edited], now)
+    expect(stats.decomposeAdoptionRate).toBe(0.5)
+  })
+
+  it('归档的 done 任务仍计入（曾经完成过）；进行中口径不含 done/cancelled', () => {
+    const archivedDone = doneTask({ status: 'archived' })
+    const active = mkTask({ status: 'in-progress', subtasks: [mkSubtask()] })
+    const cancelled = mkTask({ status: 'cancelled', subtasks: [mkSubtask()] })
+    const stats = reportStats([archivedDone, active, cancelled], now)
+    expect(stats.doneTotal).toBe(1)
+    expect(stats.activeCount).toBe(1)
   })
 })

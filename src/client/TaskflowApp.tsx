@@ -9,14 +9,17 @@ import type { TaskflowTransport } from './api.ts'
 import {
   actorLabel,
   boardGroups,
+  decimalOf,
   filterTasks,
   formatBytes,
   mergedTimeline,
   modelForSession,
   pendingApprovalCount,
   pendingApprovalsOf,
+  percentOf,
   progressRatio,
   relativeTime,
+  reportStats,
   reviewBadgeCount,
   shortArtifactPath,
   statusLabel,
@@ -36,7 +39,7 @@ import {
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
 import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
-import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
+import type { AcceptanceItem, Evidence, Subtask, Task, TaskTemplate } from '../protocol/types.ts'
 
 type TabId = 'contract' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
 
@@ -65,6 +68,8 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 统计浮层（FR-20）：只读投影，无持久化。 */
+  const [statsOpen, setStatsOpen] = useState(false)
   // 浏览器通知开关（FR-16）：偏好/权限是外部状态，本地存一份镜像驱动重渲染
   const [notifyOn, setNotifyOn] = useState(() => browserNotifyPref() && browserNotifyPermission() === 'granted')
   const [notifyDenied, setNotifyDenied] = useState(() => browserNotifyPermission() === 'denied')
@@ -249,6 +254,24 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
         <span className="tf-settings-anchor">
           <button
             type="button"
+            className={`tf-icon-btn${statsOpen ? ' tf-notify-on' : ''}`}
+            aria-label="周期统计"
+            aria-expanded={statsOpen}
+            title="周期统计（吞吐 / 一次通过率 / 迭代轮次）"
+            onClick={() => setStatsOpen(open => !open)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 3v18h18" />
+              <path d="M7 15v-4" />
+              <path d="M12 15V7" />
+              <path d="M17 15v-7" />
+            </svg>
+          </button>
+          {statsOpen && <StatsPopover tasks={tasks} onClose={() => setStatsOpen(false)} />}
+        </span>
+        <span className="tf-settings-anchor">
+          <button
+            type="button"
             className="tf-icon-btn"
             aria-label="全局设置"
             aria-expanded={settingsOpen}
@@ -353,6 +376,7 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
         <CreateDrawer
           onClose={() => setCreateOpen(false)}
           dispatch={dispatch}
+          transport={transport}
         />
       )}
       {selected !== null && (
@@ -545,9 +569,11 @@ function EmptyBoard({ onCreate }: { onCreate: () => void }): JSX.Element {
 function CreateDrawer({
   onClose,
   dispatch,
+  transport,
 }: {
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
+  transport: TaskflowTransport
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -560,6 +586,82 @@ function CreateDrawer({
   const [maxRounds, setMaxRounds] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 模板（FR-19）：加载失败静默隐藏（创建流程不因模板库缺失而卡住）
+  const [templates, setTemplates] = useState<TaskTemplate[] | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [saveTplOpen, setSaveTplOpen] = useState(false)
+  const [saveTplName, setSaveTplName] = useState('')
+  const [tplBusy, setTplBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    try {
+      transport
+        .getTemplates()
+        .then(list => {
+          if (!cancelled) setTemplates(list)
+        })
+        .catch(() => undefined)
+    } catch {
+      // transport 未提供模板口（旧宿主 bundle 混装）：隐藏模板区，创建流程不受影响
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [transport])
+
+  /** 应用模板到表单（只覆盖模板提供的字段；标题为空占位不覆盖已填内容）。 */
+  const applyTemplate = (template: TaskTemplate): void => {
+    if (template.title.trim().length > 0) setTitle(template.title)
+    setDescription(template.description)
+    setAcceptanceText(template.acceptance.join('\n'))
+    if (template.pins?.executionMode !== undefined) setMode(template.pins.executionMode)
+    setConfirmDeleteId(null)
+  }
+
+  const deleteTemplate = async (id: string): Promise<void> => {
+    if (templates === null) return
+    setTplBusy(true)
+    try {
+      const saved = await transport.saveTemplates(templates.filter(t => t.id !== id))
+      setTemplates(saved)
+    } catch (tplError) {
+      setError(tplError instanceof Error ? tplError.message : String(tplError))
+    } finally {
+      setTplBusy(false)
+      setConfirmDeleteId(null)
+    }
+  }
+
+  const saveAsTemplate = async (): Promise<void> => {
+    if (templates === null || saveTplName.trim().length === 0) return
+    const acceptance = acceptanceText
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+    if (title.trim().length === 0 && description.trim().length === 0 && acceptance.length === 0) return
+    setTplBusy(true)
+    try {
+      const saved = await transport.saveTemplates([
+        ...templates,
+        {
+          id: `tpl_${Math.random().toString(36).slice(2, 10)}`,
+          name: saveTplName.trim().slice(0, 60),
+          title: title.trim().slice(0, 120),
+          description: description.slice(0, 4000),
+          acceptance: acceptance.slice(0, 20).map(text => text.slice(0, 2000)),
+          pins: { executionMode: mode },
+        },
+      ])
+      setTemplates(saved)
+      setSaveTplOpen(false)
+      setSaveTplName('')
+    } catch (tplError) {
+      setError(tplError instanceof Error ? tplError.message : String(tplError))
+    } finally {
+      setTplBusy(false)
+    }
+  }
 
   const submit = async (): Promise<void> => {
     setBusy(true)
@@ -591,6 +693,50 @@ function CreateDrawer({
   return (
     <Drawer title="新建任务" onClose={onClose}>
       <div className="tf-form">
+        {templates !== null && templates.length > 0 && (
+          <div className="tf-field">
+            <label>从模板开始（FR-19）</label>
+            <div className="tf-tpl-row" role="group" aria-label="任务模板">
+              {templates.map(template => (
+                <span key={template.id} className="tf-tpl-chip-wrap">
+                  <button
+                    type="button"
+                    className="tf-tpl-chip"
+                    disabled={tplBusy}
+                    title={template.acceptance.length > 0 ? `验收标准（${template.acceptance.length} 条）：\n${template.acceptance.join('\n')}` : '填入模板内容'}
+                    onClick={() => applyTemplate(template)}
+                  >
+                    {template.name}
+                  </button>
+                  {confirmDeleteId === template.id ? (
+                    <button
+                      type="button"
+                      className="tf-tpl-del sure"
+                      disabled={tplBusy}
+                      aria-label={`确认删除模板 ${template.name}`}
+                      title="再点一次确认删除"
+                      onClick={() => void deleteTemplate(template.id)}
+                    >
+                      确认删?
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="tf-tpl-del"
+                      disabled={tplBusy}
+                      aria-label={`删除模板 ${template.name}`}
+                      title="删除模板"
+                      onClick={() => setConfirmDeleteId(template.id)}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </span>
+              ))}
+            </div>
+            <span className="tf-hint">点模板预填描述与验收标准；✕ 删除（两段式确认）。</span>
+          </div>
+        )}
         <div className="tf-field">
           <label htmlFor="tf-title">标题 *</label>
           <input id="tf-title" className="tf-input" maxLength={120} placeholder="一句话说清要做什么" value={title} onChange={e => setTitle(e.target.value)} />
@@ -643,6 +789,34 @@ function CreateDrawer({
           </label>
         </div>
         {error !== null && <div className="tf-banner" role="alert">{error}</div>}
+        {templates !== null && (
+          <div className="tf-field">
+            {saveTplOpen ? (
+              <div className="tf-tpl-save" role="group" aria-label="存为模板">
+                <input
+                  className="tf-input tf-tpl-save-name"
+                  value={saveTplName}
+                  maxLength={60}
+                  placeholder="模板名（如：发布检查）"
+                  aria-label="模板名"
+                  onChange={e => setSaveTplName(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="tf-btn tf-btn-primary"
+                  disabled={tplBusy || saveTplName.trim().length === 0 || (title.trim().length === 0 && description.trim().length === 0 && acceptanceText.trim().length === 0)}
+                  onClick={() => void saveAsTemplate()}
+                >
+                  {tplBusy ? '保存中…' : '保存模板'}
+                </button>
+                <button type="button" className="tf-btn" disabled={tplBusy} onClick={() => { setSaveTplOpen(false); setSaveTplName('') }}>取消</button>
+              </div>
+            ) : (
+              <button type="button" className="tf-btn" onClick={() => setSaveTplOpen(true)}>把当前表单存为模板</button>
+            )}
+            <span className="tf-hint">存标题/描述/验收标准/执行模式；常用任务一次配置，下次一键预填。</span>
+          </div>
+        )}
         <div className="tf-actions">
           <button type="button" className="tf-btn tf-btn-primary" disabled={busy || title.trim().length === 0 || description.trim().length === 0} onClick={() => void submit()}>
             {busy ? '创建中…' : '创建并开始拆解'}
@@ -651,6 +825,88 @@ function CreateDrawer({
         </div>
       </div>
     </Drawer>
+  )
+}
+
+// —— 周期统计浮层（FR-20：吞吐 / 一次通过率 / 平均迭代轮次 / 拆解采纳率） ——
+
+/** 统计口径的口径说明（面板脚注，和数字放一起才不误导）。 */
+const STATS_NOTES: Array<{ metric: string; note: string }> = [
+  { metric: '一次通过率', note: 'done 且从未被打回（round=1）的占比' },
+  { metric: '平均迭代轮次', note: 'done 任务 round 均值（§9 目标 ≤ 2）' },
+  { metric: '拆解采纳率', note: '拆解后未编辑过子任务的任务占比（§9 目标 ≥ 70%）' },
+  { metric: '吞吐', note: '按任务级 done 事件时间统计（近 7/30 天）' },
+]
+
+function StatsPopover({ tasks, onClose }: { tasks: readonly Task[]; onClose: () => void }): JSX.Element {
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.target instanceof Node ? event.target : null
+      if (target === null) return
+      const anchor = panelRef.current?.closest('.tf-settings-anchor') ?? null
+      if (panelRef.current?.contains(target) === true) return
+      if (anchor !== null && anchor.contains(target)) return
+      onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onMouseDown)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onMouseDown)
+    }
+  }, [onClose])
+
+  const stats = reportStats(tasks)
+  return (
+    <div className="tf-popover tf-stats-pop" ref={panelRef} role="dialog" aria-label="周期统计">
+      <div className="tf-pop-head">
+        <span className="tf-pop-title">周期统计</span>
+        <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭周期统计">✕</button>
+      </div>
+      <div className="tf-stats-grid">
+        <div className="tf-stat">
+          <span className="tf-stat-value">{stats.doneLast7d}</span>
+          <span className="tf-stat-label">近 7 天完成</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{stats.doneLast30d}</span>
+          <span className="tf-stat-label">近 30 天完成</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{stats.doneTotal}</span>
+          <span className="tf-stat-label">累计完成</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{stats.activeCount}</span>
+          <span className="tf-stat-label">进行中</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{percentOf(stats.firstPassRate)}</span>
+          <span className="tf-stat-label">一次通过率</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{decimalOf(stats.avgRounds)}</span>
+          <span className="tf-stat-label">平均迭代轮次</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{percentOf(stats.decomposeAdoptionRate)}</span>
+          <span className="tf-stat-label">拆解采纳率</span>
+        </div>
+        <div className="tf-stat">
+          <span className="tf-stat-value">{stats.reworkedCount}</span>
+          <span className="tf-stat-label">被打回过的任务</span>
+        </div>
+      </div>
+      <div className="tf-stats-notes">
+        {STATS_NOTES.map(note => (
+          <span className="tf-hint" key={note.metric}>{note.metric}：{note.note}</span>
+        ))}
+      </div>
+    </div>
   )
 }
 

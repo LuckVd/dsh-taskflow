@@ -5,6 +5,7 @@
  */
 
 import type { ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
+import type { TaskTemplate } from '../protocol/types.ts'
 import type { TaskflowAction } from '../protocol/actions.ts'
 
 export interface TaskflowTransport {
@@ -23,6 +24,10 @@ export interface TaskflowTransport {
   getModels(): Promise<ModelCatalog>
   /** 交付物只读预览（§4.5b）：仅限该任务证据声明过的 artifacts 路径。 */
   getArtifactPreview(taskId: string, path: string): Promise<ArtifactPreview>
+  /** 任务模板列表（FR-19）；部署未提供时抛错。 */
+  getTemplates(): Promise<TaskTemplate[]>
+  /** 覆盖模板全表（存为模板 / 删除）；服务端校验失败时抛错。 */
+  saveTemplates(next: TaskTemplate[]): Promise<TaskTemplate[]>
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -106,6 +111,18 @@ export function createHttpTransport(base = ''): TaskflowTransport {
         await fetch(`${base}/api/taskflow/artifact/preview?${query.toString()}`, { headers: { accept: 'application/json' } }),
       )
       return payload.preview
+    },
+    async getTemplates(): Promise<TaskTemplate[]> {
+      return readJson(await fetch(`${base}/api/taskflow/templates`, { headers: { accept: 'application/json' } }))
+    },
+    async saveTemplates(next: TaskTemplate[]): Promise<TaskTemplate[]> {
+      return readJson(
+        await fetch(`${base}/api/taskflow/templates`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(next),
+        }),
+      )
     },
   }
 }

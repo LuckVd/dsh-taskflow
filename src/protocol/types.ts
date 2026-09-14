@@ -265,6 +265,30 @@ export interface GlobalSettings extends ModelSettings {
   maxConcurrentSubtasks?: number
 }
 
+// —— 任务模板（FR-19，templates.json；跨 host/client 的共享形状） ——
+
+/** 模板可携带的钉脚子集（缺省 = 跟随创建表单默认）。 */
+export interface TemplatePins {
+  permission?: string
+  executionMode?: ExecutionMode
+  presetId?: string | null
+  workspace?: string
+}
+
+export interface TaskTemplate {
+  /** tpl_<随机>；客户端生成，全表内唯一（校验强制）。 */
+  id: string
+  /** 展示名（chip 文案）。 */
+  name: string
+  /** 预填标题。 */
+  title: string
+  /** 预填描述。 */
+  description: string
+  /** 预填验收标准（每行一条）。 */
+  acceptance: string[]
+  pins?: TemplatePins
+}
+
 // —— 模型目录（/api/taskflow/models 载荷；host 自 ctx.llm 结构性投影）——
 
 export interface ModelCatalogEffort {

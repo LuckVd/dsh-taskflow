@@ -253,3 +253,50 @@ describe('交付物只读预览端点（§4.5b/§7.4b）', () => {
     expect((await handleTaskflowRequest(generic, 'GET', '/api/taskflow/artifact/preview', undefined, q('/x'))).status).toBe(500)
   })
 })
+
+describe('模板库端点（FR-19）', () => {
+  function templateStore(initial: unknown[] = []): { templates: { get: () => unknown[]; update: (raw: unknown) => Promise<unknown[]> }; saved: unknown[][] } {
+    let list = initial
+    const saved: unknown[][] = []
+    return {
+      saved,
+      templates: {
+        get: () => list,
+        update: async (raw: unknown) => {
+          saved.push(raw)
+          list = raw as unknown[]
+          return list
+        },
+      },
+    }
+  }
+  const baseEngine = () =>
+    ({ getState: () => ({ ledger: { revision: 1 }, health: {} }) }) as unknown as TaskflowEngine
+
+  it('未注入存储 → 501；注入后 GET 透传', async () => {
+    const engine = baseEngine()
+    expect((await handleTaskflowRequest(engine, 'GET', '/api/taskflow/templates', undefined)).status).toBe(501)
+    const { templates } = templateStore([{ id: 'tpl_a', name: 'A', title: '', description: '', acceptance: [] }])
+    const ok = await handleTaskflowRequest(engine, 'GET', '/api/taskflow/templates', undefined, { templates: templates as never })
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body)).toHaveLength(1)
+  })
+
+  it('PUT 合法全表落盘并回显；非法 400 且不落盘', async () => {
+    const engine = baseEngine()
+    const { templates, saved } = templateStore()
+    const ok = await handleTaskflowRequest(
+      engine,
+      'PUT',
+      '/api/taskflow/templates',
+      JSON.stringify([{ id: 'tpl_b', name: 'B', title: '', description: '', acceptance: ['x'] }]),
+      { templates: templates as never },
+    )
+    expect(ok.status).toBe(200)
+    expect(saved).toHaveLength(1)
+
+    const bad = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/templates', JSON.stringify([{ id: 'bad', name: 'x', title: '', description: '', acceptance: [] }]), { templates: templates as never })
+    expect(bad.status).toBe(400)
+    expect(saved).toHaveLength(1)
+  })
+})

@@ -337,4 +337,65 @@ export function shortArtifactPath(path: string, max = 46): string {
   return `…/${fileName.slice(-(max - 2))}`
 }
 
+// —— 周期统计（FR-20：吞吐 / 一次通过率 / 平均迭代轮次 / 拆解采纳率） ——
+
+export interface ReportStats {
+  /** 进行中口径（非终态、非归档）。 */
+  activeCount: number
+  /** 累计完成（done，不含归档可见性差异——archived 也是曾经 done）。 */
+  doneTotal: number
+  /** 近 7/30 天完成数（按任务级 done 事件时间）。 */
+  doneLast7d: number
+  doneLast30d: number
+  /** 一次验收通过率：done 且 round===1（从未被打回）/ done 总数；无样本为 null。 */
+  firstPassRate: number | null
+  /** 平均迭代轮次：done 任务 round 均值；无样本为 null。 */
+  avgRounds: number | null
+  /** 拆解采纳率：拆解后未发生过 editSubtasks 的任务占比；无拆解样本为 null。 */
+  decomposeAdoptionRate: number | null
+  /** 被打回过的任务数（历史累计，round>1 的非 draft 任务）。 */
+  reworkedCount: number
+}
+
+/** 任务完成时间：任务级事件里最后一次转移到 done 的时刻。 */
+function doneAt(task: Task): number | undefined {
+  const event = [...task.events].reverse().find(e => e.to === 'done')
+  return event?.at
+}
+
+export function reportStats(tasks: readonly Task[], now = Date.now()): ReportStats {
+  const day = 24 * 60 * 60_000
+  const visible = tasks.filter(t => t.status !== 'archived')
+  const doneTasks = tasks.filter(t => t.status === 'done' || (t.status === 'archived' && doneAt(t) !== undefined))
+  const doneTimes = doneTasks.map(doneAt).filter((t): t is number => t !== undefined)
+  const roundSum = doneTasks.reduce((sum, t) => sum + t.round, 0)
+  const firstPass = doneTasks.filter(t => t.round === 1).length
+  const decomposed = tasks.filter(t => t.subtasks.length > 0)
+  const unedited = decomposed.filter(
+    t => !t.events.some(e => e.kind === 'subtasks-edited'),
+  ).length
+  return {
+    activeCount: visible.filter(t => !['done', 'cancelled'].includes(t.status)).length,
+    doneTotal: doneTasks.length,
+    doneLast7d: doneTimes.filter(at => now - at <= 7 * day).length,
+    doneLast30d: doneTimes.filter(at => now - at <= 30 * day).length,
+    firstPassRate: doneTasks.length === 0 ? null : firstPass / doneTasks.length,
+    avgRounds: doneTasks.length === 0 ? null : roundSum / doneTasks.length,
+    decomposeAdoptionRate: decomposed.length === 0 ? null : unedited / decomposed.length,
+    reworkedCount: tasks.filter(t => t.round > 1 && t.subtasks.length > 0).length,
+  }
+}
+
+/** 比率的人类可读形态（0.833 → 83%）。 */
+export function percentOf(rate: number | null): string {
+  if (rate === null) return '—'
+  return `${Math.round(rate * 100)}%`
+}
+
+/** 均值的人类可读形态（1.67 → 1.7；null → —）。 */
+export function decimalOf(value: number | null): string {
+  if (value === null) return '—'
+  return value.toFixed(1)
+}
+
 export type { Ledger }
