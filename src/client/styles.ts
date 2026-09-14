@@ -131,6 +131,8 @@ export const TASKFLOW_CSS = `
 .tf-batchbar .count { font-weight: 700; color: ${V.label}; font-variant-numeric: tabular-nums; }
 /* 批量打回批语输入（FR-14）：复用 .tf-input 视觉，这里只管布局（窄屏自然换行） */
 .tf-batch-comment { flex: 1 1 220px; min-width: 180px; max-width: 420px; min-height: 24px; padding: 4px 8px; }
+/* 浏览器通知开关开启态（FR-16）：铃铛描边加粗示意 */
+.tf-notify-on { color: ${V.business}; border-color: ${V.business}; }
 .tf-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-desc { font-size: 12px; line-height: 1.45; color: ${V.label2}; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .tf-card-meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: ${V.label2}; flex-wrap: wrap; min-height: 18px; }

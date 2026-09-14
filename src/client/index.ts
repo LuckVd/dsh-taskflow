@@ -26,6 +26,8 @@ import { NotificationBar } from './NotificationBar.tsx'
 import type { TaskflowTransport } from './api.ts'
 import { createHttpTransport } from './api.ts'
 import { injectStyles } from './styles.ts'
+import { installBrowserNotifications } from './notifications.ts'
+import { setBoardFocus } from './focus.ts'
 
 export { TaskflowApp }
 export { NotificationBar }
@@ -34,6 +36,14 @@ export type { TaskflowTransport } from './api.ts'
 export * from './view.ts'
 export { setBoardFocus, clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 export type { BoardFocus } from './focus.ts'
+export {
+  browserNotifyPref,
+  browserNotifyPermission,
+  browserNotifySupported,
+  installBrowserNotifications,
+  requestBrowserNotifyPermission,
+  setBrowserNotifyPref,
+} from './notifications.ts'
 
 const roots = new WeakMap<HTMLElement, Root>()
 
@@ -353,12 +363,18 @@ export function clientApply(ctx: MinimalClientContext): void {
   injectStyles()
   const cleanupEntry = installSidebarEntry(toggleBoard)
   const disposeNotify = mountNotificationLayer(document.body, getTransport(), { onOpen: () => setBoardOpen(true) })
+  // FR-16 浏览器通知：shell 级常驻（看板关着也要能响）；点击通知打开看板并定位任务
+  const disposeBrowserNotify = installBrowserNotifications(getTransport(), focus => {
+    setBoardFocus({ taskId: focus.taskId, ...(focus.approvalId !== undefined ? { approvalId: focus.approvalId } : {}) })
+    setBoardOpen(true)
+  })
   const disposeSessionWatch = watchSessionSwitch(ctx)
   ctx.effect?.(() => () => disposeSessionWatch(), 'taskflow.session-watch')
   ctx.effect?.(() => {
     return () => {
       cleanupEntry()
       disposeNotify()
+      disposeBrowserNotify()
       setBoardOpen(false)
     }
   }, 'taskflow.entry-cleanup')

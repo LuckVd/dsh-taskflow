@@ -26,6 +26,13 @@ import {
 import type { CardSummary, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
+import {
+  browserNotifyPermission,
+  browserNotifyPref,
+  browserNotifySupported,
+  requestBrowserNotifyPermission,
+  setBrowserNotifyPref,
+} from './notifications.ts'
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
 import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
@@ -58,6 +65,9 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 浏览器通知开关（FR-16）：偏好/权限是外部状态，本地存一份镜像驱动重渲染
+  const [notifyOn, setNotifyOn] = useState(() => browserNotifyPref() && browserNotifyPermission() === 'granted')
+  const [notifyDenied, setNotifyDenied] = useState(() => browserNotifyPermission() === 'denied')
   // 批量操作（2026-09-12 归档 → 2026-09-15 FR-14 扩展批量验收）：选择模式 +
   // 勾选（待验收 / 可归档状态）+ 二次确认后逐个 dispatch（复用单任务守卫与留痕）
   const [batchMode, setBatchMode] = useState(false)
@@ -206,6 +216,35 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
             <i aria-hidden="true" />
             待审批 {approvalCount}
           </span>
+        )}
+        {browserNotifySupported() && (
+          <button
+            type="button"
+            className={`tf-icon-btn${notifyOn ? ' tf-notify-on' : ''}`}
+            aria-pressed={notifyOn}
+            aria-label={notifyOn ? '关闭浏览器通知' : '开启浏览器通知'}
+            title={notifyDenied ? '浏览器通知权限已被拒绝，请在浏览器设置中恢复' : notifyOn ? '浏览器通知已开启' : '待验收/待审批时发浏览器通知（点击开启）'}
+            onClick={() => void (async () => {
+              if (notifyOn) {
+                setBrowserNotifyPref(false)
+                setNotifyOn(false)
+                return
+              }
+              const permission = browserNotifyPermission() === 'granted' ? 'granted' : await requestBrowserNotifyPermission()
+              if (permission !== 'granted') {
+                setNotifyDenied(permission === 'denied')
+                return
+              }
+              setBrowserNotifyPref(true)
+              setNotifyOn(true)
+              setNotifyDenied(false)
+            })()}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+          </button>
         )}
         <span className="tf-settings-anchor">
           <button
