@@ -16,7 +16,7 @@ import type { TaskflowAction } from '../protocol/actions.ts'
 import { DecomposeValidationError, validateDecomposeOutput } from '../protocol/decompose.ts'
 import type { DecomposeOutput } from '../protocol/decompose.ts'
 import { EvidenceRejectedError, normalizeEvidence, parseEvidenceInput, renderEvidenceCorrection } from '../protocol/evidence.ts'
-import type { ApprovalRecord, DispatchResult, EngineState, Evidence, ExecutionMode, Ledger, ModelSettings, Pins, SessionModelSelection, Subtask, Task } from '../protocol/types.ts'
+import type { ApprovalRecord, DispatchResult, EngineState, Evidence, ExecutionMode, GlobalSettings, Ledger, Pins, SessionModelSelection, Subtask, Task } from '../protocol/types.ts'
 import type { ArtifactPreview } from '../protocol/types.ts'
 import { resolveExecutionMode } from '../protocol/types.ts'
 import { ArtifactPreviewError, readArtifactPreview } from './artifacts.ts'
@@ -124,7 +124,7 @@ export interface SessionAdapter {
 // —— 配置与常量 ——
 
 export interface EngineConfig {
-  /** 同时运行的子任务会话数（M1 默认 1 = 全局串行，Q2 裁决）。 */
+  /** 同时运行的子任务会话数（WIP 基线，默认 1 = 串行；可被全局设置覆盖，FR-13）。 */
   maxConcurrentSubtasks: number
   /** 会话默认权限（§7.1 权限确认门的基线）。 */
   sessionDefaultPermission: string
@@ -134,7 +134,11 @@ export interface EngineConfig {
   decomposeRetries: number
   /** 任务级终检会话自动重试次数（§4.5，2026-09-11：失败重试 1 次，再失败兜底直接 T5）。 */
   finalizeRetries: number
-  /** M1 忽略 deps（仅展示）；true 时启用 DAG 就绪守卫（M2，Q2 裁决）。 */
+  /**
+   * 依赖 DAG 就绪守卫（FR-12，M2 起默认开）：依赖未全部 done 的子任务不调度；
+   * 前序被打回时下游子任务回退重排（rollbackDependents）。置 false 仅用于
+   * 兼容旧数据的人工排障（plugin config 可覆盖）。
+   */
   enforceDeps: boolean
   /**
    * 执行会话静默看门狗（分钟；0 = 关闭）：会话无 pending 审批而静默超过该时长
@@ -149,7 +153,7 @@ export const DEFAULT_ENGINE_CONFIG: EngineConfig = {
   maxSessionAttempts: 2,
   decomposeRetries: 1,
   finalizeRetries: 1,
-  enforceDeps: false,
+  enforceDeps: true,
   sessionStallTimeoutMin: 30,
 }
 
@@ -199,8 +203,8 @@ export class TaskflowEngine {
   private readonly pendingApprovals = new Map<string, (decision: 'allowed' | 'rejected') => void>()
   /** 执行会话静默看门狗：sessionId → timer。 */
   private readonly stallTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  /** 全局模型设置（内存权威；持久化由 ModelSettingsStore 承担，HTTP 层经 setModelSettings 写入）。 */
-  private modelSettings: ModelSettings = { decompose: null, execution: null }
+  /** 全局设置（内存权威；持久化由 GlobalSettingsStore 承担，HTTP 层经 setGlobalSettings 写入）。 */
+  private globalSettings: GlobalSettings = { decompose: null, execution: null }
   private disposed = false
   private booted = false
 
@@ -210,17 +214,33 @@ export class TaskflowEngine {
     readonly config: EngineConfig = DEFAULT_ENGINE_CONFIG,
   ) {}
 
-  /** 全局模型设置（快照）。 */
-  getModelSettings(): ModelSettings {
-    return structuredClone(this.modelSettings)
+  /** 全局设置快照；并发上限返回「生效值」（设置值 ?? 引擎配置），UI 直接可展示。 */
+  getGlobalSettings(): GlobalSettings {
+    return structuredClone({
+      decompose: this.globalSettings.decompose,
+      execution: this.globalSettings.execution,
+      maxConcurrentSubtasks: this.effectiveMaxConcurrent(),
+    })
   }
 
-  /** 覆盖全局模型设置（调用方负责持久化；仅影响之后新建的会话）。 */
-  setModelSettings(next: ModelSettings): void {
-    this.modelSettings = {
+  /**
+   * 覆盖全局设置（调用方负责持久化）。模型两槽仅影响之后新建的会话；
+   * 并发上限即改即生效——提高上限立即放行排队中的子任务（FR-13），
+   * 降低上限不杀运行中的会话（只是不再发新车，自然收敛）。
+   */
+  setGlobalSettings(next: GlobalSettings): void {
+    const concurrencyChanged = (next.maxConcurrentSubtasks ?? this.config.maxConcurrentSubtasks) !== this.effectiveMaxConcurrent()
+    this.globalSettings = {
       decompose: next.decompose === null ? null : { ...next.decompose },
       execution: next.execution === null ? null : { ...next.execution },
+      ...(next.maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks: next.maxConcurrentSubtasks } : {}),
     }
+    if (concurrencyChanged && this.booted && !this.disposed) void this.pump()
+  }
+
+  /** 生效的 WIP 上限：设置值覆盖引擎配置（plugin config / 默认）。 */
+  private effectiveMaxConcurrent(): number {
+    return this.globalSettings.maxConcurrentSubtasks ?? this.config.maxConcurrentSubtasks
   }
 
   /**
@@ -532,7 +552,7 @@ export class TaskflowEngine {
       const task = findTask(ledger, taskId)
       if (task === null) throw new GuardError(`task ${taskId} not found`)
       const sessionId = `tfs_${taskId}_d${attempt}_${randomId(4)}`
-      const model = this.modelSettings.decompose
+      const model = this.globalSettings.decompose
       const modelRefs = { sessionId, ...(modelLabel(model) !== undefined ? { model: modelLabel(model) } : {}) }
       if (task.status === 'decomposing') {
         // 重试路径：已在拆解中，不重复 T2，仅追加会话与留痕
@@ -842,18 +862,22 @@ export class TaskflowEngine {
       if (selected.length === 0) {
         return { ok: false, code: 'guard', error: '没有可打回的子任务（须处于待验收状态）' }
       }
+      const cancels: string[] = []
       await this.store.mutate(ledger => {
         const task = findTask(ledger, action.taskId)
         if (task === null) throw new GuardError(`task ${action.taskId} not found`)
         for (const subtaskId of selected) {
           reworkSubtaskInPlace(task, subtaskId, action.comment)
         }
+        // FR-12：返工集的传递下游一并回退（运行中终止会话、举证完毕的作废重排）
+        cancels.push(...rollbackDependents(task, selected))
         task.round += 1
         invalidateTaskEvidence(task)
         if (task.status === 'review') {
           transitionTask(task, 'in-progress', { actor: 'human', reason: `打回：${firstLine(action.comment)}（T7）` })
         }
       })
+      for (const sessionId of cancels) await this.retireSession(sessionId, '依赖回退：下游执行会话终止')
       await this.pump()
       return { ok: true, revision: this.currentRevision(), taskId: action.taskId, subtaskIds: selected }
     }
@@ -907,7 +931,7 @@ export class TaskflowEngine {
       if (task.status === 'review') {
         transitionTask(task, 'in-progress', { actor: 'human', reason: `打回：${firstLine(action.comment)}（T7）` })
       }
-      const model = this.modelSettings.decompose
+      const model = this.globalSettings.decompose
       return {
         taskId: task.id,
         sessionId,
@@ -947,7 +971,7 @@ export class TaskflowEngine {
       if (task.evidence !== undefined || task.finalizeSessionId !== undefined) return null
       const sessionId = `tfs_${taskId}_f${attempt}_${randomId(4)}`
       task.finalizeSessionId = sessionId
-      const model = this.modelSettings.decompose
+      const model = this.globalSettings.decompose
       const modelRefs = { sessionId, ...(modelLabel(model) !== undefined ? { model: modelLabel(model) } : {}) }
       appendTaskNote(task, {
         actor: 'system',
@@ -1099,7 +1123,7 @@ export class TaskflowEngine {
       task.finalizeSessionId = sessionId
       const reran = task.evidence !== undefined
       task.evidence = undefined // 重跑：原任务级证据立即作废，终检成功后以新证据替代
-      const model = this.modelSettings.decompose
+      const model = this.globalSettings.decompose
       appendTaskNote(task, {
         actor: 'human',
         kind: 'final-check-started',
@@ -1155,6 +1179,7 @@ export class TaskflowEngine {
     }
 
     try {
+      const cancels: string[] = []
       await this.store.mutate(ledger => {
         const task = findTask(ledger, input.taskId)
         if (task === null) throw new GuardError(`task ${input.taskId} not found`)
@@ -1179,6 +1204,8 @@ export class TaskflowEngine {
           sub.progressNotes = []
           sub.sessionId = undefined
         }
+        // FR-12：定位返工集的传递下游（牵连重做集）一并回退；独立分支不动
+        cancels.push(...rollbackDependents(task, scope))
         task.round += 1
         invalidateTaskEvidence(task)
         task.triageSessionId = undefined
@@ -1188,6 +1215,7 @@ export class TaskflowEngine {
           reason: `返工范围（AI 定位${note !== '' ? `：${firstLine(note)}` : ''}）：${scope.join(', ')}`,
         })
       })
+      for (const sessionId of cancels) await this.retireSession(sessionId, '依赖回退：下游执行会话终止')
       await this.pump()
     } catch {
       // 任务消失/终态等极端情形：静默收敛（会话输入作废）
@@ -1376,7 +1404,7 @@ export class TaskflowEngine {
         continue
       }
       for (const sub of task.subtasks) {
-        if (running >= this.config.maxConcurrentSubtasks) return
+        if (running >= this.effectiveMaxConcurrent()) return
         // 排队态：pending，或打回/重启后的 in-progress 且尚未取号
         const queued = sub.status === 'pending' || (sub.status === 'in-progress' && sub.sessionId === undefined)
         if (!queued) continue
@@ -1394,7 +1422,7 @@ export class TaskflowEngine {
         sub.sessionIds.push(sessionId)
         sub.attempt += 1
         sub.progressNotes = []
-        const modelRefs = { sessionId, ...(modelLabel(this.modelSettings.execution) !== undefined ? { model: modelLabel(this.modelSettings.execution) } : {}) }
+        const modelRefs = { sessionId, ...(modelLabel(this.globalSettings.execution) !== undefined ? { model: modelLabel(this.globalSettings.execution) } : {}) }
         if (sub.status === 'pending') {
           transitionSubtask(sub, 'in-progress', { actor: 'system', reason: '调度器启动执行会话（S2）', refs: modelRefs })
         } else {
@@ -1406,11 +1434,15 @@ export class TaskflowEngine {
     }
   }
 
-  /** M1 忽略 deps（Q2 裁决：仅展示）；enforceDeps=true 时启用 DAG 就绪守卫。 */
+  /**
+   * 依赖 DAG 就绪守卫（FR-12，默认开）：直接依赖「产物已存在」（done 或 review=举证完毕，
+   * 2026-09-11 语义：子任务不再逐个人批，review 即工作完成）才算就绪；
+   * 未知 dep 引用视为未满足（fail-closed）。前序此后被打回时由 rollbackDependents 回退下游。
+   */
   private depsSatisfied(task: Task, sub: Subtask): boolean {
     return sub.deps.every(dep => {
       const target = task.subtasks.find(s => s.id === dep)
-      return target === undefined ? false : target.status === 'done'
+      return target === undefined ? false : target.status === 'done' || target.status === 'review'
     })
   }
 
@@ -1458,7 +1490,7 @@ export class TaskflowEngine {
       workspace: task.contract.pins.workspace,
       presetId: task.contract.pins.presetId,
       permission: task.contract.pins.permission,
-      model: this.modelSettings.execution,
+      model: this.globalSettings.execution,
       executionMode: resolveExecutionMode(task.contract.pins, this.config.sessionDefaultPermission),
       tools: {
         submitEvidence: async payload => this.toolSubmitEvidence(sessionId, payload),
@@ -1734,6 +1766,14 @@ export class TaskflowEngine {
     }
   }
 
+  /** 在引擎侧收敛一个被终止的运行中会话：摘存活表、卸看门狗、过期 pending 审批、通知适配器取消。 */
+  private async retireSession(sessionId: string, reason: string): Promise<void> {
+    this.liveExecutionSessions.delete(sessionId)
+    this.clearStallTimer(sessionId)
+    await this.expireApprovals(sessionId, reason)
+    await this.adapter.cancelSession(sessionId).catch(() => undefined)
+  }
+
   // —— 看门狗（G2：无声挂起可见化）——
 
   /** 会话启动/接管时武装；有 pending 审批时视为「等人」顺延，其他静默超时 → blocked（可重试）。 */
@@ -1852,6 +1892,72 @@ function reworkSubtaskInPlace(task: Task, subtaskId: string, comment: string): v
   sub.attempt = 0
   sub.progressNotes = []
   sub.sessionId = undefined
+}
+
+/**
+ * FR-12「前序打回则后序回退」：对返工集合的传递下游执行结构回退。
+ *
+ * - 传播沿 deps 闭包进行（穿过 done 中间节点继续传播，但 done 节点本身不动——
+ *   人工批准的结论不自动作废，仅在任务级留「可能过期」提示）；
+ * - in-progress 且持有会话（真在跑）→ 终止会话，blocked → pending 两步回退排队；
+ * - review（举证完毕）→ rejected → in-progress 回退排队（证据基于过期前置产物）；
+ * - pending / 无会话的排队态无需回退：DAG 就绪守卫已保证它们不会抢跑。
+ *
+ * 与 2026-09-11 triage 语义的关系：AI 定位的返工范围是「直接重做集」，
+ * 其结构下游是「牵连重做集」——未牵连的独立分支不动。
+ * 返回需要调用方取消的会话 id（mutate 内只改账本，取消在 mutate 外执行）。
+ */
+function rollbackDependents(task: Task, reworkedIds: readonly string[]): string[] {
+  const reworked = new Set(reworkedIds)
+  // 污染闭包：返工集的全部传递下游（含 done 节点——继续传播但自身不回退）
+  const contaminated = new Set<string>()
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const sub of task.subtasks) {
+      if (reworked.has(sub.id) || contaminated.has(sub.id)) continue
+      const dependsOnAffected = sub.deps.some(dep => reworked.has(dep) || contaminated.has(dep))
+      if (!dependsOnAffected) continue
+      contaminated.add(sub.id)
+      changed = true
+    }
+  }
+  const cancels: string[] = []
+  const staleDone: string[] = []
+  for (const sub of task.subtasks) {
+    if (!contaminated.has(sub.id)) continue
+    if (sub.status === 'in-progress' && sub.sessionId !== undefined) {
+      cancels.push(sub.sessionId)
+      appendSubtaskNote(sub, {
+        actor: 'system',
+        kind: 'dep-rollback',
+        reason: '依赖子任务返工，执行会话终止回退（FR-12）',
+        refs: { sessionId: sub.sessionId },
+      })
+      transitionSubtask(sub, 'blocked', { actor: 'system', reason: '依赖返工，运行中止（FR-12 回退）' })
+      transitionSubtask(sub, 'pending', { actor: 'system', reason: '等待依赖重做后自动重排（FR-12 回退）' })
+      sub.attempt = 0
+      sub.progressNotes = []
+      sub.sessionId = undefined
+    } else if (sub.status === 'review') {
+      transitionSubtask(sub, 'rejected', { actor: 'system', reason: '依赖子任务返工，证据基于过期前置产物（FR-12 回退）', refs: { sessionId: sub.sessionId } })
+      transitionSubtask(sub, 'in-progress', { actor: 'system', reason: '等待依赖重做后自动重排（FR-12 回退）' })
+      sub.attempt = 0
+      sub.progressNotes = []
+      sub.sessionId = undefined
+    } else if (sub.status === 'done') {
+      staleDone.push(sub.id)
+    }
+  }
+  if (staleDone.length > 0) {
+    const titles = staleDone.map(id => findSubtask(task, id)?.title ?? id)
+    appendTaskNote(task, {
+      actor: 'system',
+      kind: 'dep-rollback',
+      reason: `依赖返工波及已批准子任务：${titles.join('、')} 的结论基于过期前置产物，建议人工复核`,
+    })
+  }
+  return cancels
 }
 
 /** 任务进入返工迭代：任务级终检证据随之作废（终检将在子任务重新齐备后重跑）。 */

@@ -271,7 +271,7 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     await waitFor(() => doc.querySelector('.tf-notification-layer .tf-notify') === null)
   })
 
-  it('模型设置浮层：齿轮打开 → 两槽下拉 → 修改即写入引擎设置', async () => {
+  it('全局设置浮层：齿轮打开 → 两槽下拉 + 调度并发 → 修改即写入引擎设置', async () => {
     const doc = dom.window.document
     // 关闭上一用例遗留的弹窗，回到看板
     const closeDrawer = [...doc.querySelectorAll('.tf-modal-head button')].at(-1) as HTMLElement | undefined
@@ -279,9 +279,9 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     await waitFor(() => doc.querySelector('.tf-modal') === null)
 
     // 齿轮打开浮层
-    ;(doc.querySelector('[aria-label="模型设置"]') as HTMLElement).click()
+    ;(doc.querySelector('[aria-label="全局设置"]') as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-popover') !== null)
-    expect(doc.querySelector('.tf-popover')!.textContent).toContain('模型设置')
+    expect(doc.querySelector('.tf-popover')!.textContent).toContain('全局设置')
     // 目录异步到达：「跟随宿主默认」项带出宿主默认值后再断言
     await waitFor(() => doc.querySelector('.tf-popover')!.textContent?.includes('跟随宿主默认（deepseek/deepseek-chat）') ?? false)
     const execSelect = doc.querySelector('select[aria-label="执行 agent · 模型"]') as HTMLSelectElement
@@ -291,15 +291,26 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     // optgroup 按 provider 分组（两槽 × 2 provider）
     expect(doc.querySelectorAll('.tf-popover optgroup').length).toBe(4)
 
+    // 调度槽（FR-13）：并发上限选择器存在且默认 1（串行）
+    const concSelect = doc.querySelector('select[aria-label="并发子任务上限"]') as HTMLSelectElement
+    expect(concSelect).toBeTruthy()
+    expect(concSelect.value).toBe('1')
+
     // 执行槽选择 ollama 模型（原生 setter 绕过 React value tracker）
     const nativeSelectSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value')!.set!
     nativeSelectSetter.call(execSelect, 'ollama::qwen3:8b')
     execSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
-    await waitFor(() => engine.getModelSettings().execution?.model === 'qwen3:8b')
-    expect(engine.getModelSettings().decompose).toBeNull()
+    await waitFor(() => engine.getGlobalSettings().execution?.model === 'qwen3:8b')
+    expect(engine.getGlobalSettings().decompose).toBeNull()
     await waitFor(() => doc.querySelector('.tf-popover')!.textContent?.includes('已保存') ?? false)
     // 拆解槽保持跟随宿主默认
     expect(decompSelect.value).toBe('')
+
+    // 并发上限改为 3 → 引擎设置生效（提高立即放行排队）
+    nativeSelectSetter.call(concSelect, '3')
+    concSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await waitFor(() => engine.getGlobalSettings().maxConcurrentSubtasks === 3)
+    await waitFor(() => doc.querySelector('.tf-popover')!.textContent?.includes('已保存') ?? false)
 
     // Esc 关闭浮层
     doc.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

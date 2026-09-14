@@ -28,7 +28,7 @@ import { dshHomePath } from './compat.ts'
 import { DEFAULT_ENGINE_CONFIG, TaskflowEngine } from '../engine.ts'
 import type { EngineConfig } from '../engine.ts'
 import { LedgerStore } from '../ledger.ts'
-import { ModelSettingsStore } from '../settings.ts'
+import { GlobalSettingsStore } from '../settings.ts'
 import { createSseStream, handleTaskflowRequest, isTrustedRequest } from '../http.ts'
 import type { ModelCatalog, ModelCatalogGroup } from '../../protocol/types.ts'
 import { DshSessionAdapter } from './adapter.ts'
@@ -41,8 +41,10 @@ export const inject = ['agents', 'tools', 'webServer', 'sessionPersistence', 'pe
 export interface TaskflowPluginConfig {
   /** 数据目录；默认 $DSH_HOME/taskflow（NFR-07：与 dsh-task-board 完全分离）。 */
   dataDir?: string
-  /** 并发子任务会话上限（M1 默认 1 = 串行）。 */
+  /** 并发子任务会话上限基线（默认 1 = 串行；可被全局设置 maxConcurrentSubtasks 覆盖，FR-13）。 */
   maxConcurrentSubtasks?: number
+  /** 依赖 DAG 就绪守卫（FR-12，默认 true）。仅人工排障旧数据时才需要显式关闭。 */
+  enforceDeps?: boolean
   /** 会话默认权限（权限确认门基线，§7.1）。 */
   sessionDefaultPermission?: string
   /** 宿主默认工作区（pins.workspace 为空时的落点）。 */
@@ -54,6 +56,7 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
   const engineConfig: EngineConfig = {
     ...DEFAULT_ENGINE_CONFIG,
     ...(config.maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks: config.maxConcurrentSubtasks } : {}),
+    ...(config.enforceDeps !== undefined ? { enforceDeps: config.enforceDeps } : {}),
     ...(config.sessionDefaultPermission !== undefined
       ? { sessionDefaultPermission: config.sessionDefaultPermission }
       : {}),
@@ -65,13 +68,13 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
     defaultModelSelection: () => readDefaultModelSelection(ctx),
   })
   const engine = new TaskflowEngine(new LedgerStore(path.join(dataDir, 'ledger.json')), adapter, engineConfig)
-  const settings = new ModelSettingsStore(path.join(dataDir, 'settings.json'))
+  const settings = new GlobalSettingsStore(path.join(dataDir, 'settings.json'))
 
   ctx.effect(() => {
     // 设置加载失败不阻塞启动：回退默认（两槽 = 跟随宿主），lastLoadError 留排查口
     void settings
       .load()
-      .then(() => engine.setModelSettings(settings.get()))
+      .then(() => engine.setGlobalSettings(settings.get()))
       .catch(error => {
         ctx.logger.warn(`taskflow: settings load failed: ${error instanceof Error ? error.message : String(error)}`)
       })
@@ -114,6 +117,8 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       const body = await readBody(req)
       const result = await handleTaskflowRequest(engine, req.method ?? 'GET', url.pathname, body, {
         models: buildModelCatalogFrom(ctx),
+        // PUT settings 的落盘口（fail-closed：落盘失败不改引擎内存）
+        persistSettings: next => settings.update(next),
         query: url.searchParams,
       })
       res.writeHead(result.status, result.headers)

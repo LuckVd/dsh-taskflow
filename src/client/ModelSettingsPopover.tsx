@@ -1,8 +1,9 @@
 /**
- * 模型设置浮层（工具栏齿轮，§PLAN-MODEL）：拆解/执行两槽模型选择。
+ * 全局设置浮层（工具栏齿轮，§PLAN-MODEL + FR-13）：模型两槽 + 调度并发。
  *
  * - 两槽均为「跟随宿主默认」或显式 provider/model（原生 select + optgroup，同 .tf-select 语言）；
- * - 即改即存（PUT /api/taskflow/settings），失败回滚 UI 并就地报错；
+ * - 调度槽 = 并发子任务上限（1–8；提高立即放行排队，降低不杀运行中会话）；
+ * - 即改即存（PUT /api/taskflow/settings，先落盘后生效），失败回滚 UI 并就地报错；
  * - 已保存的模型从目录消失 → 琥珀「不可路由」提示，不擅自清除用户选择；
  * - Esc / 点击面板与齿轮以外区域关闭。
  *
@@ -10,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { ModelCatalog, ModelSettings, SessionModelSelection } from '../protocol/types.ts'
+import type { GlobalSettings, ModelCatalog, SessionModelSelection } from '../protocol/types.ts'
 import type { TaskflowTransport } from './api.ts'
 
 type Slot = 'decompose' | 'execution'
@@ -19,6 +20,9 @@ const SLOT_META: Record<Slot, { icon: string; title: string; desc: string }> = {
   decompose: { icon: '🧩', title: '拆解 agent', desc: '任务规划 · 验收补全' },
   execution: { icon: '⚡', title: '执行 agent', desc: '子任务实现 · 举证' },
 }
+
+/** 并发上限可选项（与服务端校验域一致，1–8）。 */
+const CONCURRENCY_CHOICES = [1, 2, 3, 4, 6, 8] as const
 
 function encodeSelection(selection: SessionModelSelection): string {
   return `${selection.provider}::${selection.model}`
@@ -43,7 +47,7 @@ export function ModelSettingsPopover({
   onClose: () => void
 }): JSX.Element {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
-  const [settings, setSettings] = useState<ModelSettings | null>(null)
+  const [settings, setSettings] = useState<GlobalSettings | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [savedTick, setSavedTick] = useState(false)
@@ -95,10 +99,26 @@ export function ModelSettingsPopover({
     }
   }, [onClose])
 
+  /** 即改即存的公共落盘流：乐观更新 → PUT → 失败回滚并就地报错。 */
+  const save = async (previous: GlobalSettings, next: GlobalSettings): Promise<void> => {
+    setSettings(next)
+    setSaveError(null)
+    setSavedTick(false)
+    try {
+      const saved = await transport.saveSettings(next)
+      setSettings(saved)
+      setSavedTick(true)
+      window.setTimeout(() => setSavedTick(false), 2000)
+    } catch (error) {
+      setSettings(previous)
+      setSaveError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   const change = async (slot: Slot, modelValue: string, effort?: string): Promise<void> => {
     if (settings === null) return
     const previous = settings
-    let next: ModelSettings
+    let next: GlobalSettings
     if (modelValue === '') {
       next = { ...settings, [slot]: null }
     } else {
@@ -115,18 +135,13 @@ export function ModelSettingsPopover({
         },
       }
     }
-    setSettings(next)
-    setSaveError(null)
-    setSavedTick(false)
-    try {
-      const saved = await transport.saveSettings(next)
-      setSettings(saved)
-      setSavedTick(true)
-      window.setTimeout(() => setSavedTick(false), 2000)
-    } catch (error) {
-      setSettings(previous)
-      setSaveError(error instanceof Error ? error.message : String(error))
-    }
+    await save(previous, next)
+  }
+
+  /** 并发上限（FR-13）：提高立即放行排队中的子任务；降低不中断运行中的会话。 */
+  const changeConcurrency = async (value: number): Promise<void> => {
+    if (settings === null) return
+    await save(settings, { ...settings, maxConcurrentSubtasks: value })
   }
 
   const defaultLabel =
@@ -135,10 +150,10 @@ export function ModelSettingsPopover({
       : `${catalog.default.provider}/${catalog.default.model}`
 
   return (
-    <div className="tf-popover" ref={panelRef} role="dialog" aria-label="模型设置">
+    <div className="tf-popover" ref={panelRef} role="dialog" aria-label="全局设置">
       <div className="tf-pop-head">
-        <span className="tf-pop-title">模型设置</span>
-        <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭模型设置">✕</button>
+        <span className="tf-pop-title">全局设置</span>
+        <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭全局设置">✕</button>
       </div>
       {settings === null ? (
         <span className="tf-hint tf-pop-error">{loadError === null ? '设置加载中…' : `设置加载失败：${loadError}`}</span>
@@ -190,11 +205,33 @@ export function ModelSettingsPopover({
             </div>
           )
           })}
+          <div className="tf-slot">
+            <span className="tf-slot-label">
+              ⚙️ 调度
+              <span className="tf-slot-desc">并发子任务上限（WIP）</span>
+            </span>
+            <select
+              className="tf-select"
+              value={String(settings.maxConcurrentSubtasks ?? 1)}
+              aria-label="并发子任务上限"
+              onChange={event => void changeConcurrency(Number(event.target.value))}
+            >
+              {concurrencyChoices(settings.maxConcurrentSubtasks ?? 1).map(value => (
+                <option key={value} value={value}>{value === 1 ? '1（串行）' : String(value)}</option>
+              ))}
+            </select>
+            <span className="tf-hint">提高上限立即放行排队中的子任务；降低不中断运行中的会话（FR-13）。</span>
+          </div>
         </>
       )}
       {saveError !== null && <span className="tf-hint tf-pop-error">保存失败：{saveError}</span>}
-      <span className="tf-hint">修改只影响之后新建的会话，运行中的会话不受影响。</span>
+      <span className="tf-hint">模型修改只影响之后新建的会话，运行中的会话不受影响。</span>
       <span className="tf-pop-state" role="status" aria-label="保存状态">{savedTick ? '已保存 ✓' : ''}</span>
     </div>
   )
+}
+
+/** 选项集固定档位；当前值不在档位内（API 设置过 5/7 等）时动态补入，避免 select 显示错位。 */
+function concurrencyChoices(current: number): number[] {
+  return [...new Set([...CONCURRENCY_CHOICES, current])].sort((a, b) => a - b)
 }

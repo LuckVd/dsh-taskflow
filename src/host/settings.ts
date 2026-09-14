@@ -1,7 +1,10 @@
 /**
- * 全局模型设置存储：dataDir/settings.json（与 ledger.json 并列，见 docs/PLAN-MODEL.md）。
+ * 全局设置存储：dataDir/settings.json（与 ledger.json 并列）。
  *
- * - 形状校验 fail-closed：非两槽结构 / 非法 selection 一律拒绝（HttpBadRequest 语义由调用层映射）；
+ * 内容 = 模型两槽（docs/PLAN-MODEL.md）+ 调度并发（FR-13 WIP 上限）。
+ *
+ * - 形状校验 fail-closed：非两槽结构 / 非法 selection / 并发越界一律拒绝
+ *   （HttpBadRequest 语义由调用层映射）；
  * - 损坏回退默认：settings 属非关键数据，load 失败不阻塞引擎（lastLoadError 留告警口）；
  * - 原子写：临时文件 + fsync + rename，0600（同 LedgerStore 形态）。
  *
@@ -10,43 +13,55 @@
 
 import path from 'node:path'
 import { open, rename, mkdir, readFile } from 'node:fs/promises'
-import type { ModelSettings, SessionModelSelection } from '../protocol/types.ts'
+import type { GlobalSettings, SessionModelSelection } from '../protocol/types.ts'
 
-export const DEFAULT_MODEL_SETTINGS: ModelSettings = { decompose: null, execution: null }
+export const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = { decompose: null, execution: null }
 
-export class ModelSettingsError extends Error {
+/** 并发上限取值域（FR-13）：1 = 串行（M1 语义），8 = 单机资源护栏。 */
+export const MAX_CONCURRENT_SUBTASKS_LIMIT = 8
+
+export class SettingsError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'ModelSettingsError'
+    this.name = 'SettingsError'
   }
 }
 
-/** 校验并归一化一次设置提交（PUT body / 存量文件共用）；非法即抛 ModelSettingsError。 */
-export function validateModelSettings(raw: unknown): ModelSettings {
+/** 校验并归一化一次设置提交（PUT body / 存量文件共用）；非法即抛 SettingsError。 */
+export function validateGlobalSettings(raw: unknown): GlobalSettings {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new ModelSettingsError('settings 必须是对象（{ decompose, execution }）')
+    throw new SettingsError('settings 必须是对象（{ decompose, execution, maxConcurrentSubtasks? }）')
   }
   const record = raw as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (key !== 'decompose' && key !== 'execution') {
-      throw new ModelSettingsError(`未知字段：${key}（仅允许 decompose / execution）`)
+    if (key !== 'decompose' && key !== 'execution' && key !== 'maxConcurrentSubtasks') {
+      throw new SettingsError(`未知字段：${key}（仅允许 decompose / execution / maxConcurrentSubtasks）`)
     }
+  }
+  let maxConcurrentSubtasks: number | undefined
+  if (record.maxConcurrentSubtasks !== undefined) {
+    const value = record.maxConcurrentSubtasks
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_CONCURRENT_SUBTASKS_LIMIT) {
+      throw new SettingsError(`maxConcurrentSubtasks 必须是 1–${MAX_CONCURRENT_SUBTASKS_LIMIT} 的整数`)
+    }
+    maxConcurrentSubtasks = value
   }
   return {
     decompose: validateSlot(record.decompose, 'decompose'),
     execution: validateSlot(record.execution, 'execution'),
+    ...(maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks } : {}),
   }
 }
 
 function validateSlot(raw: unknown, slot: string): SessionModelSelection | null {
   if (raw === undefined || raw === null) return null
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new ModelSettingsError(`${slot} 必须是 null 或 { provider, model }`)
+    throw new SettingsError(`${slot} 必须是 null 或 { provider, model }`)
   }
   const value = raw as Record<string, unknown>
   for (const key of Object.keys(value)) {
     if (key !== 'provider' && key !== 'model' && key !== 'reasoningEffort') {
-      throw new ModelSettingsError(`${slot} 未知字段：${key}`)
+      throw new SettingsError(`${slot} 未知字段：${key}`)
     }
   }
   const provider = requireNonEmptyString(value.provider, `${slot}.provider`)
@@ -61,7 +76,7 @@ function validateSlot(raw: unknown, slot: string): SessionModelSelection | null 
 
 function requireNonEmptyString(raw: unknown, field: string): string {
   if (typeof raw !== 'string' || raw.trim().length === 0) {
-    throw new ModelSettingsError(`${field} 必须是非空字符串`)
+    throw new SettingsError(`${field} 必须是非空字符串`)
   }
   return raw.trim()
 }
@@ -72,9 +87,9 @@ export function modelLabel(selection: SessionModelSelection | null | undefined):
   return `${selection.provider}/${selection.model}${selection.reasoningEffort !== undefined ? `·${selection.reasoningEffort}` : ''}`
 }
 
-/** 全局模型设置存储（内存权威 + 原子落盘；engine 经 getter/setter 消费）。 */
-export class ModelSettingsStore {
-  private settings: ModelSettings = { ...DEFAULT_MODEL_SETTINGS }
+/** 全局设置存储（内存权威 + 原子落盘；engine 经 getter/setter 消费）。 */
+export class GlobalSettingsStore {
+  private settings: GlobalSettings = { ...DEFAULT_GLOBAL_SETTINGS }
   /** 最近一次 load 失败的原因（非致命：回退默认继续运行）。 */
   lastLoadError: string | null = null
 
@@ -90,25 +105,26 @@ export class ModelSettingsStore {
       return // 缺文件 = 首次运行
     }
     try {
-      this.settings = validateModelSettings(JSON.parse(raw))
+      this.settings = validateGlobalSettings(JSON.parse(raw))
     } catch (error) {
+      this.settings = { ...DEFAULT_GLOBAL_SETTINGS }
       this.lastLoadError = error instanceof Error ? error.message : String(error)
     }
   }
 
-  get(): ModelSettings {
+  get(): GlobalSettings {
     return structuredClone(this.settings)
   }
 
-  /** 校验 + 原子落盘 + 内存生效；校验失败抛 ModelSettingsError（不落盘不改内存）。 */
-  async update(raw: unknown): Promise<ModelSettings> {
-    const next = validateModelSettings(raw)
+  /** 校验 + 原子落盘 + 内存生效；校验失败抛 SettingsError（不落盘不改内存）。 */
+  async update(raw: unknown): Promise<GlobalSettings> {
+    const next = validateGlobalSettings(raw)
     await this.atomicWrite(next)
     this.settings = next
     return structuredClone(next)
   }
 
-  private async atomicWrite(settings: ModelSettings): Promise<void> {
+  private async atomicWrite(settings: GlobalSettings): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
     const payload = JSON.stringify(settings, null, 2)

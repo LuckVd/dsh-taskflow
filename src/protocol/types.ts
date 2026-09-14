@@ -255,6 +255,16 @@ export interface ModelSettings {
   execution: SessionModelSelection | null
 }
 
+/**
+ * 全局设置（settings.json 全量形状）：模型两槽 + 调度并发（FR-13）。
+ * `maxConcurrentSubtasks` 缺省 = 跟随引擎配置（plugin config / 默认 1）；
+ * 显式设置后覆盖引擎配置，即改即生效（提高并发立即放行排队子任务）。
+ */
+export interface GlobalSettings extends ModelSettings {
+  /** 同时运行的子任务执行会话数（WIP 上限，1–8 整数；1 = 串行）。 */
+  maxConcurrentSubtasks?: number
+}
+
 // —— 模型目录（/api/taskflow/models 载荷；host 自 ctx.llm 结构性投影）——
 
 export interface ModelCatalogEffort {

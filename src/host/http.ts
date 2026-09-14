@@ -5,8 +5,8 @@
  * - GET  /api/taskflow/state     全量带 revision 快照（+ health）
  * - GET  /api/taskflow/events    SSE：revision/调度变化推送（断线重连拉全量，NFR-04）
  * - POST /api/taskflow/action    幂等 action 提交（requestId 去重，≤64KiB）
- * - GET  /api/taskflow/settings  全局模型设置（两槽，§PLAN-MODEL）
- * - PUT  /api/taskflow/settings  覆盖全局模型设置（fail-closed 形状校验）
+ * - GET  /api/taskflow/settings  全局设置（模型两槽 + 调度并发，§PLAN-MODEL / FR-13）
+ * - PUT  /api/taskflow/settings  覆盖全局设置（fail-closed 形状校验；先落盘后生效）
  * - GET  /api/taskflow/models    宿主模型目录投影（下拉数据源；未注入提供方 → 501）
  * - GET  /api/taskflow/artifact/preview?taskId=&path=  交付物只读预览（仅限证据声明过的路径，§7.4b）
  *
@@ -15,10 +15,10 @@
 
 import type { IncomingHttpHeaders } from 'node:http'
 import { MAX_ACTION_BYTES } from '../protocol/types.ts'
-import type { ModelCatalog, ModelSettings } from '../protocol/types.ts'
+import type { GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import { isArtifactPreviewError } from './artifacts.ts'
 import type { TaskflowEngine } from './engine.ts'
-import { ModelSettingsError, validateModelSettings } from './settings.ts'
+import { SettingsError, validateGlobalSettings } from './settings.ts'
 
 export interface HttpResult {
   status: number
@@ -67,13 +67,19 @@ export function isTrustedRequest(
 /** 处理一次（非 SSE）请求；SSE 由 plugin 层用 {@link createSseStream} 绑定。
  *  `models`：宿主模型目录投影的提供方（dsh 适配器注入 ctx.llm 投影）。
  *  未提供时 GET models 返回 501（客户端展示「目录不可用」，两槽仍可保存）。
+ *  `persistSettings`：设置落盘口（GlobalSettingsStore.update）；未提供时 PUT settings
+ *  仅改内存（测试桩/无盘部署）——生产入口必须提供，否则设置重启即失。
  *  `query`：URL 查询参数（artifact/preview 用 taskId/path 定位）。 */
 export async function handleTaskflowRequest(
   engine: TaskflowEngine,
   method: string,
   pathname: string,
   body: string | undefined,
-  opts: { models?: () => Promise<ModelCatalog>; query?: URLSearchParams } = {},
+  opts: {
+    models?: () => Promise<ModelCatalog>
+    persistSettings?: (settings: GlobalSettings) => Promise<unknown>
+    query?: URLSearchParams
+  } = {},
 ): Promise<HttpResult> {
   if (method === 'GET' && pathname === '/api/taskflow/state') {
     const state = engine.getState()
@@ -93,7 +99,7 @@ export async function handleTaskflowRequest(
     return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(result) }
   }
   if (method === 'GET' && pathname === '/api/taskflow/settings') {
-    const settings: ModelSettings = engine.getModelSettings()
+    const settings: GlobalSettings = engine.getGlobalSettings()
     return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(settings) }
   }
   if (method === 'PUT' && pathname === '/api/taskflow/settings') {
@@ -106,14 +112,22 @@ export async function handleTaskflowRequest(
     } catch {
       return jsonError(400, 'request body must be valid JSON.')
     }
-    let settings: ModelSettings
+    let settings: GlobalSettings
     try {
-      settings = validateModelSettings(parsed)
+      settings = validateGlobalSettings(parsed)
     } catch (error) {
-      return jsonError(400, error instanceof ModelSettingsError ? error.message : 'invalid settings shape.')
+      return jsonError(400, error instanceof SettingsError ? error.message : 'invalid settings shape.')
     }
-    engine.setModelSettings(settings)
-    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(engine.getModelSettings()) }
+    // 先持久化后生效（fail-closed）：落盘失败不改动引擎内存，重启后仍是旧值
+    if (opts.persistSettings !== undefined) {
+      try {
+        await opts.persistSettings(settings)
+      } catch (error) {
+        return jsonError(500, `settings persist failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    engine.setGlobalSettings(settings)
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(engine.getGlobalSettings()) }
   }
   if (method === 'GET' && pathname === '/api/taskflow/models') {
     if (opts.models === undefined) return jsonError(501, 'model catalog is unavailable in this deployment.')

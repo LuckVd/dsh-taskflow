@@ -4,7 +4,7 @@
  * @module dsh-taskflow/client
  */
 
-import type { ArtifactPreview, DispatchResult, EngineState, ModelCatalog, ModelSettings } from '../protocol/types.ts'
+import type { ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import type { TaskflowAction } from '../protocol/actions.ts'
 
 export interface TaskflowTransport {
@@ -15,10 +15,10 @@ export interface TaskflowTransport {
   dispatch(action: TaskflowAction): Promise<DispatchResult>
   /** 订阅 revision 变化；返回退订函数。 */
   subscribe(onChange: () => void): () => void
-  /** 全局模型设置（模型设置浮层）。 */
-  getSettings(): Promise<ModelSettings>
+  /** 全局设置（模型两槽 + 调度并发；设置浮层）。 */
+  getSettings(): Promise<GlobalSettings>
   /** 覆盖全局模型设置；服务端校验失败时抛错（调用方回滚 UI）。 */
-  saveSettings(next: ModelSettings): Promise<ModelSettings>
+  saveSettings(next: GlobalSettings): Promise<GlobalSettings>
   /** 宿主模型目录（下拉数据源）；部署未提供时抛错。 */
   getModels(): Promise<ModelCatalog>
   /** 交付物只读预览（§4.5b）：仅限该任务证据声明过的 artifacts 路径。 */
@@ -85,10 +85,10 @@ export function createHttpTransport(base = ''): TaskflowTransport {
         source = undefined
       }
     },
-    async getSettings(): Promise<ModelSettings> {
+    async getSettings(): Promise<GlobalSettings> {
       return readJson(await fetch(`${base}/api/taskflow/settings`, { headers: { accept: 'application/json' } }))
     },
-    async saveSettings(next: ModelSettings): Promise<ModelSettings> {
+    async saveSettings(next: GlobalSettings): Promise<GlobalSettings> {
       return readJson(
         await fetch(`${base}/api/taskflow/settings`, {
           method: 'PUT',

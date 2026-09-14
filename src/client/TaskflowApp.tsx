@@ -21,6 +21,7 @@ import {
   shortArtifactPath,
   statusLabel,
   subtaskStatusLabel,
+  subtaskWait,
 } from './view.ts'
 import type { CardSummary, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
@@ -175,9 +176,9 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           <button
             type="button"
             className="tf-icon-btn"
-            aria-label="模型设置"
+            aria-label="全局设置"
             aria-expanded={settingsOpen}
-            title="模型设置"
+            title="全局设置"
             onClick={() => setSettingsOpen(open => !open)}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -857,20 +858,27 @@ function SubtasksTab({ task }: { task: Task }): JSX.Element {
       <span className="tf-section-title">子任务（{task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length}/{task.subtasks.length} 完成）</span>
       <div className="tf-list">
         {task.subtasks.map(sub => (
-          <SubtaskItem key={sub.id} sub={sub} />
+          <SubtaskItem key={sub.id} sub={sub} task={task} />
         ))}
       </div>
     </div>
   )
 }
 
-function SubtaskItem({ sub }: { sub: Subtask }): JSX.Element {
+function SubtaskItem({ sub, task }: { sub: Subtask; task: Task }): JSX.Element {
+  const wait = subtaskWait(task, sub)
   return (
     <div className="tf-item">
       <div className="tf-item-head">
         <StatusDot status={sub.status} />
         <span className="tf-item-title">{sub.title}</span>
         <span className="tf-chip">{subtaskStatusLabel(sub.status)}</span>
+        {wait?.kind === 'deps' && (
+          <span className="tf-chip tf-chip-warn" title={`等待依赖完成：${wait.blockers.join('、')}`}>
+            等依赖：{wait.blockers[0]}{wait.blockers.length > 1 ? ` 等 ${wait.blockers.length} 项` : ''}
+          </span>
+        )}
+        {wait?.kind === 'wip' && <span className="tf-chip">排队中</span>}
         {sub.round > 1 && <span className="tf-chip">第 {sub.round} 轮</span>}
         {sub.attempt > 1 && <span className="tf-chip">attempt {sub.attempt}</span>}
       </div>

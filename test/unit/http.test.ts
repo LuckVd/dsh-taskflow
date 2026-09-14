@@ -74,21 +74,22 @@ describe('/api/taskflow 端点（§6）', () => {
   })
 })
 
-describe('模型设置与模型目录端点（§PLAN-MODEL）', () => {
-  function settingsEngine(): { engine: TaskflowEngine; saved: unknown[] } {
+describe('全局设置与模型目录端点（§PLAN-MODEL / FR-13）', () => {
+  function settingsEngine(): { engine: TaskflowEngine; saved: unknown[]; persisted: unknown[] } {
     const saved: unknown[] = []
+    const persisted: unknown[] = []
     const engine = {
       getState: () => ({ ledger: { schemaVersion: 1, revision: 1, tasks: [] }, health: { corrupt: null, lastWriteFailed: false } }),
       dispatch: async () => ({ ok: true }),
       subscribe: () => () => undefined,
-      getModelSettings: () => current,
-      setModelSettings: (next: unknown) => {
+      getGlobalSettings: () => current,
+      setGlobalSettings: (next: unknown) => {
         saved.push(next)
         current = next
       },
     } as unknown as TaskflowEngine
-    let current = { decompose: null, execution: null }
-    return { engine, saved }
+    let current: Record<string, unknown> = { decompose: null, execution: null }
+    return { engine, saved, persisted }
   }
 
   it('GET settings 默认两槽 null', async () => {
@@ -117,6 +118,51 @@ describe('模型设置与模型目录端点（§PLAN-MODEL）', () => {
     const noBody = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', undefined)
     expect(noBody.status).toBe(400)
     expect(saved).toHaveLength(1)
+  })
+
+  it('PUT settings 并发上限：合法写入回显；越界 400（FR-13）', async () => {
+    const { engine, saved } = settingsEngine()
+    const ok = await handleTaskflowRequest(
+      engine,
+      'PUT',
+      '/api/taskflow/settings',
+      JSON.stringify({ decompose: null, execution: null, maxConcurrentSubtasks: 3 }),
+    )
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body).maxConcurrentSubtasks).toBe(3)
+    expect(saved).toHaveLength(1)
+
+    const bad = await handleTaskflowRequest(
+      engine,
+      'PUT',
+      '/api/taskflow/settings',
+      JSON.stringify({ decompose: null, execution: null, maxConcurrentSubtasks: 0 }),
+    )
+    expect(bad.status).toBe(400)
+    expect(saved).toHaveLength(1)
+  })
+
+  it('PUT settings 先落盘后生效：persist 失败 500 且不触碰引擎内存', async () => {
+    const { engine, saved } = settingsEngine()
+    const fail = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', JSON.stringify({ maxConcurrentSubtasks: 2 }), {
+      persistSettings: async () => {
+        throw new Error('disk full')
+      },
+    })
+    expect(fail.status).toBe(500)
+    expect(saved).toHaveLength(0)
+  })
+
+  it('PUT settings 落盘口透传（持久化回调收到校验后的形状）', async () => {
+    const { engine, persisted } = settingsEngine()
+    const ok = await handleTaskflowRequest(engine, 'PUT', '/api/taskflow/settings', JSON.stringify({ maxConcurrentSubtasks: 4 }), {
+      persistSettings: async next => {
+        persisted.push(next)
+      },
+    })
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body).maxConcurrentSubtasks).toBe(4)
+    expect((persisted[0] as { maxConcurrentSubtasks?: number }).maxConcurrentSubtasks).toBe(4)
   })
 
   it('GET models：未注入提供方 501；注入则透传目录（目录加载失败 502）', async () => {

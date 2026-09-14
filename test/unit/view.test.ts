@@ -13,6 +13,7 @@ import {
   relativeTime,
   statusLabel,
   subtaskStatusLabel,
+  subtaskWait,
 } from '../../src/client/view.ts'
 import type { Subtask, Task } from '../../src/protocol/types.ts'
 
@@ -351,5 +352,43 @@ describe('卡片 awaitingHuman：权限确认只看当前状态（2026-09-12 真
   it('in-progress 但已确认过：不再显示「执行需确认」', () => {
     const card = cardSummary(mkTaskWithAwaitingEvent({ status: 'in-progress', permissionConfirmed: true }))
     expect(card.awaitingHuman).toBeUndefined()
+  })
+})
+
+// —— 队列可视化（FR-13：排队/等依赖） ——
+
+describe('subtaskWait（排队原因投影）', () => {
+  it('依赖未完成 → 等依赖（列出阻塞者标题）；未知 dep 视为未满足', () => {
+    const s1 = mkSubtask({ id: 's1', title: '地基', status: 'in-progress', sessionId: 'sess-a' })
+    const s2 = mkSubtask({ id: 's2', title: '楼房', deps: ['s1'], status: 'pending', sessionId: undefined })
+    const task = mkTask({ subtasks: [s1, s2] })
+    expect(subtaskWait(task, s2)).toEqual({ kind: 'deps', blockers: ['地基'] })
+
+    const s3 = mkSubtask({ id: 's3', title: '幽灵', deps: ['s404'], status: 'pending', sessionId: undefined })
+    expect(subtaskWait(task, s3)).toEqual({ kind: 'deps', blockers: ['s404'] })
+  })
+
+  it('依赖全 done 或举证完毕（review）→ 等 WIP 空位；无依赖同样排队', () => {
+    const s1 = mkSubtask({ id: 's1', title: '地基', status: 'done' })
+    const s2 = mkSubtask({ id: 's2', title: '楼房', deps: ['s1'], status: 'pending', sessionId: undefined })
+    const s3 = mkSubtask({ id: 's3', title: '独立', deps: [], status: 'pending', sessionId: undefined })
+    const s4 = mkSubtask({ id: 's4', title: '装修', deps: ['s2'], status: 'pending', sessionId: undefined })
+    const task = mkTask({ subtasks: [s1, s2, s3, s4] })
+    s2.status = 'review' // 举证完毕 = 产物已存在，不再是下游的阻塞者
+    expect(subtaskWait(task, s3)).toEqual({ kind: 'wip', blockers: [] })
+    expect(subtaskWait(task, s4)).toEqual({ kind: 'wip', blockers: [] })
+  })
+
+  it('非排队态（运行中/举证完毕/已批准）与非执行中任务 → undefined', () => {
+    const s1 = mkSubtask({ id: 's1', title: '运行中', status: 'in-progress', sessionId: 'sess-a', deps: [] })
+    const s2 = mkSubtask({ id: 's2', title: '举证完毕', status: 'review', deps: [] })
+    const s3 = mkSubtask({ id: 's3', title: '已批准', status: 'done', deps: [] })
+    const task = mkTask({ subtasks: [s1, s2, s3] })
+    expect(subtaskWait(task, s1)).toBeUndefined()
+    expect(subtaskWait(task, s2)).toBeUndefined()
+    expect(subtaskWait(task, s3)).toBeUndefined()
+
+    const reviewTask = mkTask({ status: 'review', subtasks: [mkSubtask({ status: 'pending' })] })
+    expect(subtaskWait(reviewTask, reviewTask.subtasks[0]!)).toBeUndefined()
   })
 })

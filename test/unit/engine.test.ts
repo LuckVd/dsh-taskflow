@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_ENGINE_CONFIG, TaskflowEngine } from '../../src/host/engine.ts'
 import { LedgerStore } from '../../src/host/ledger.ts'
-import type { DispatchResult } from '../../src/host/engine.ts'
+import type { DecomposeResult, DispatchResult } from '../../src/host/engine.ts'
 import { MockSessionAdapter, buildPassingEvidence } from '../../src/host/mock/session-adapter.ts'
 import { cleanup, ledgerOf, subtaskOf, taskOf, tempDir, waitFor } from '../helpers.ts'
 
@@ -910,7 +910,7 @@ describe('全局模型设置（§PLAN-MODEL：两槽传递 + 留痕）', () => {
       const taskId = await createOneWordTask(engine)
       await waitFor(() => statusOf(engine, taskId)() === 'review')
 
-      expect(engine.getModelSettings()).toEqual({ decompose: null, execution: null })
+      expect(engine.getGlobalSettings()).toEqual({ decompose: null, execution: null, maxConcurrentSubtasks: 1 })
       expect(adapter.decomposeRuns[0]?.model).toBeNull()
       for (const run of adapter.executionRuns) expect(run.model).toBeNull()
       const task = taskOf(engine, taskId)
@@ -927,7 +927,7 @@ describe('全局模型设置（§PLAN-MODEL：两槽传递 + 留痕）', () => {
     const dir = await tempDir()
     try {
       const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
-      engine.setModelSettings({
+      engine.setGlobalSettings({
         decompose: { provider: 'deepseek', model: 'deepseek-reasoner', reasoningEffort: 'high' },
         execution: { provider: 'ollama', model: 'qwen3:8b' },
       })
@@ -948,7 +948,7 @@ describe('全局模型设置（§PLAN-MODEL：两槽传递 + 留痕）', () => {
       const withModel = task.subtasks.flatMap(sub => sub.history).find(event => event.refs?.model !== undefined)
       expect(withModel?.refs?.model).toBe('ollama/qwen3:8b')
       // 快照隔离：改设置不影响已创建对象的引用
-      engine.setModelSettings({ decompose: null, execution: null })
+      engine.setGlobalSettings({ decompose: null, execution: null })
       expect(task.events.some(event => event.refs?.model !== undefined)).toBe(true)
     } finally {
       await cleanup(dir)
@@ -1310,6 +1310,274 @@ describe('交付物一等公民（§4.5b：artifacts 声明 + 只读预览）', 
 
       await expect(engine.readArtifactPreview(taskId, dirPath)).rejects.toMatchObject({ code: 'not-a-file' })
       await expect(engine.readArtifactPreview(taskId, gonePath)).rejects.toMatchObject({ code: 'not-found' })
+    } finally {
+      await cleanup(dir)
+    }
+  })
+})
+
+// —— FR-12/FR-13（2026-09-15）：依赖 DAG 就绪守卫 + WIP 并发上限 + 依赖回退 ——
+
+describe('依赖 DAG 与 WIP 调度（FR-12/FR-13）', () => {
+  /** 三子任务链式依赖的拆解行为：S2 依赖 S1，S3 依赖 S2。 */
+  function chainedDecompose(input: { taskId: string }): DecomposeResult | Promise<DecomposeResult> {
+    void input
+    return {
+      kind: 'ok',
+      output: {
+        taskAcceptance: [{ text: '链式验收（mock）' }],
+        subtasks: [
+          { title: 'S1 基础', detail: '', acceptance: [{ text: 'S1 完成' }], deps: [] },
+          { title: 'S2 中层', detail: '', acceptance: [{ text: 'S2 完成' }], deps: ['S1 基础'] },
+          { title: 'S3 顶层', detail: '', acceptance: [{ text: 'S3 完成' }], deps: ['S2 中层'] },
+        ],
+      },
+    }
+  }
+
+  /** 挂起门：release() 前执行会话不结束（构造「正在运行占额度」）。 */
+  function gate(): { promise: Promise<void>; release: () => void } {
+    let release!: () => void
+    const promise = new Promise<void>(resolve => {
+      release = resolve
+    })
+    return { promise, release }
+  }
+
+  it('FR-12：依赖未满足不调度；前序完成后后序自动就绪（默认 enforceDeps=true）', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { maxConcurrentSubtasks: 3 })
+      adapter.decomposeBehavior = chainedDecompose
+      const held = gate()
+      let s1Released = false
+      adapter.executionBehavior = async input => {
+        const sub = ledgerOf(engine).tasks.flatMap(t => t.subtasks).find(s => s.id === input.subtaskId)
+        if (sub === undefined) throw new Error('subtask missing')
+        // S1 运行期间挂住：证明 S2/S3 不会抢跑（并发 3 足以排除 WIP 因素）
+        if (sub.deps.length === 0 && !s1Released) await held.promise
+        const result = await input.tools.submitEvidence(buildPassingEvidence(ledgerOf(engine), input.subtaskId))
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+
+      // S1 立即启动且被挂住；S2/S3 因依赖未满足不启动
+      await waitFor(() => adapter.executionRuns.length === 1)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect(adapter.executionRuns).toHaveLength(1)
+      expect(adapter.executionRuns[0]?.subtaskId).toBe(taskOf(engine, taskId).subtasks[0]?.id)
+
+      // 放行 S1：链式推进 S1 → S2 → S3（每步只放行下一个）
+      s1Released = true
+      held.release()
+      await waitFor(() => adapter.executionRuns.length === 2)
+      expect(adapter.executionRuns[1]?.subtaskId).toBe(taskOf(engine, taskId).subtasks[1]?.id)
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(adapter.executionRuns).toHaveLength(3)
+      expect(adapter.executionRuns[2]?.subtaskId).toBe(taskOf(engine, taskId).subtasks[2]?.id)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('FR-13：并发上限内同时发车，超出的排队等空位', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { maxConcurrentSubtasks: 2 })
+      adapter.decomposeBehavior = input => ({
+        kind: 'ok',
+        output: {
+          taskAcceptance: [{ text: '并行验收（mock）' }],
+          subtasks: [1, 2, 3].map(n => ({
+            title: `独立任务 ${n}`,
+            detail: '',
+            acceptance: [{ text: `任务 ${n} 完成` }],
+            deps: [],
+          })),
+        },
+      })
+      const held = gate()
+      let started = 0
+      adapter.executionBehavior = async input => {
+        started += 1
+        void input
+        if (input.attempt <= 1 && started <= 2) await held.promise // 前两个挂住占满额度
+        const sub = ledgerOf(engine).tasks.flatMap(t => t.subtasks).find(s => s.id === input.subtaskId)
+        if (sub === undefined) throw new Error('subtask missing')
+        const result = await input.tools.submitEvidence(buildPassingEvidence(ledgerOf(engine), input.subtaskId))
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+
+      await waitFor(() => started === 2)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect(started).toBe(2) // 第三个在排队
+
+      held.release()
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(adapter.executionRuns).toHaveLength(3)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('FR-13：全局设置提高并发立即放行排队（设置覆盖引擎配置）', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { maxConcurrentSubtasks: 1 })
+      adapter.decomposeBehavior = input => ({
+        kind: 'ok',
+        output: {
+          taskAcceptance: [{ text: '扩容验收（mock）' }],
+          subtasks: [1, 2, 3].map(n => ({
+            title: `扩容任务 ${n}`,
+            detail: '',
+            acceptance: [{ text: `任务 ${n} 完成` }],
+            deps: [],
+          })),
+        },
+      })
+      const held = gate()
+      adapter.executionBehavior = async input => {
+        void input
+        if (input.attempt <= 1) await held.promise
+        const result = await input.tools.submitEvidence(buildPassingEvidence(ledgerOf(engine), input.subtaskId))
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+
+      await waitFor(() => adapter.executionRuns.length === 1)
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(adapter.executionRuns).toHaveLength(1) // 配置 1：其余排队
+
+      engine.setGlobalSettings({ decompose: null, execution: null, maxConcurrentSubtasks: 3 })
+      await waitFor(() => adapter.executionRuns.length === 3) // 提高即放行，无需等其他事件
+
+      held.release()
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(engine.getGlobalSettings().maxConcurrentSubtasks).toBe(3)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('FR-12：打回前序 → 举证完毕的下游回退重排；独立分支不动（legacy 乱序数据的矫正）', async () => {
+    const dir = await tempDir()
+    try {
+      // enforceDeps=false 复现旧数据形态：三个子任务全部乱序跑到 review
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { enforceDeps: false })
+      adapter.decomposeBehavior = input => ({
+        kind: 'ok',
+        output: {
+          taskAcceptance: [{ text: '回退验收（mock）' }],
+          subtasks: [
+            { title: '地基', detail: '', acceptance: [{ text: '地基完成' }], deps: [] },
+            { title: '楼房', detail: '', acceptance: [{ text: '楼房完成' }], deps: ['地基'] },
+            { title: '花园', detail: '', acceptance: [{ text: '花园完成' }], deps: [] },
+          ],
+        },
+      })
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      const [base, building, garden] = taskOf(engine, taskId).subtasks
+      expect(base?.status).toBe('review')
+      expect(building?.status).toBe('review')
+      expect(garden?.status).toBe('review')
+
+      // 打回「地基」：楼房（依赖地基，review）必须回退；花园（独立分支）不动
+      const reject = await engine.dispatch({
+        type: 'rejectSubtask',
+        requestId: 'req-reject-dep',
+        taskId,
+        subtaskIds: [base!.id],
+        comment: '地基不平，重做',
+      })
+      expect(reject.ok).toBe(true)
+
+      const after = taskOf(engine, taskId)
+      const buildingAfter = after.subtasks.find(s => s.id === building!.id)!
+      const gardenAfter = after.subtasks.find(s => s.id === garden!.id)!
+      expect(after.status).toBe('in-progress')
+      // 回退后处于排队态（enforceDeps=false 下 pump 可能已重新发车，故两态皆可）
+      expect(buildingAfter.status === 'pending' || buildingAfter.status === 'in-progress').toBe(true)
+      // 回退留痕：rejected（系统 Actor）+ FR-12 原因
+      expect(buildingAfter.history.some(e => e.to === 'rejected' && e.reason?.includes('FR-12'))).toBe(true)
+      expect(gardenAfter.status).toBe('review') // 独立分支不受牵连
+
+      // 重跑收敛：地基重做完成 → 楼房自动重排 → 任务再次进 review
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      const final = taskOf(engine, taskId)
+      expect(final.subtasks.every(s => s.status === 'review' || s.status === 'done')).toBe(true)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('FR-12：打回前序 → 运行中的下游会话被取消并回退排队', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { enforceDeps: false, maxConcurrentSubtasks: 2 })
+      adapter.decomposeBehavior = input => ({
+        kind: 'ok',
+        output: {
+          taskAcceptance: [{ text: '取消验收（mock）' }],
+          subtasks: [
+            { title: '前序', detail: '', acceptance: [{ text: '前序完成' }], deps: [] },
+            { title: '后序', detail: '', acceptance: [{ text: '后序完成' }], deps: ['前序'] },
+          ],
+        },
+      })
+      const held = gate()
+      adapter.executionBehavior = async (input, call) => {
+        if (input.subtaskId === taskOf(engine, input.taskId).subtasks[1]?.id) {
+          // 后序挂住：构造「运行中」
+          try {
+            await held.promise
+          } catch {
+            // 门被弃置也视为放行
+          }
+          const result = await input.tools.submitEvidence(buildPassingEvidence(ledgerOf(engine), input.subtaskId))
+          if (!result.accepted) throw new Error(result.correction)
+          return
+        }
+        void call
+        const result = await input.tools.submitEvidence(buildPassingEvidence(ledgerOf(engine), input.subtaskId))
+        if (!result.accepted) throw new Error(result.correction)
+      }
+      await engine.boot()
+      const taskId = await createOneWordTask(engine)
+      const [first, second] = taskOf(engine, taskId).subtasks
+
+      // 前序举证完毕（review），后序仍在运行（enforceDeps=false 的乱序形态）
+      await waitFor(() => taskOf(engine, taskId).subtasks[0]?.status === 'review' && adapter.executionRuns.length === 2)
+      // 在打回前固定后序的运行会话 id（回退后 pump 可能立刻重新发车换新 id）
+      const downstreamSession = subtaskOf(engine, taskId, 1).sessionId
+      expect(downstreamSession).toBeTruthy()
+
+      const reject = await engine.dispatch({
+        type: 'rejectSubtask',
+        requestId: 'req-reject-run',
+        taskId,
+        subtaskIds: [first!.id],
+        comment: '前序推倒重来',
+      })
+      expect(reject.ok).toBe(true)
+
+      // 后序：原会话被取消、留 dep-rollback 痕、回到排队（pump 或已重新发车）
+      expect(adapter.cancelled).toContain(downstreamSession!)
+      const after = subtaskOf(engine, taskId, 1)
+      expect(after.history.some(e => e.kind === 'dep-rollback')).toBe(true)
+      expect(after.status === 'pending' || after.status === 'in-progress').toBe(true)
+
+      held.release()
+      // 收敛：前序重做 → 后序（此时 enforceDeps=false 不拦乱序，但依赖回退后它会重跑）→ review
+      await waitFor(() => statusOf(engine, taskId)() === 'review')
+      expect(taskOf(engine, taskId).subtasks.every(s => s.status === 'review' || s.status === 'done')).toBe(true)
+      void second
     } finally {
       await cleanup(dir)
     }

@@ -181,6 +181,7 @@ const KIND_LABEL: Record<string, string> = {
   'approval-rejected': '审批 · 拒绝',
   'approval-expired': '审批失效',
   'session-stalled': '看门狗超时',
+  'dep-rollback': '依赖回退',
 }
 
 const TASK_STATUS_LABEL: Record<Task['status'], string> = {
@@ -261,6 +262,34 @@ export function statusLabel(status: Task['status']): string {
 
 export function subtaskStatusLabel(status: Subtask['status']): string {
   return SUBTASK_STATUS_LABEL[status] ?? status
+}
+
+// —— 队列可视化（FR-13：排队/等依赖一眼可辨）——
+
+export interface SubtaskWait {
+  kind: 'deps' | 'wip'
+  /** kind=deps 时：尚未 done 的直接依赖标题（展示「等谁」）。 */
+  blockers: string[]
+}
+
+/**
+ * 子任务排队原因：任务执行中、子任务在排队态（pending / 无会话的 in-progress）时——
+ * 直接依赖产物未就绪（done/review 之外）→ 等依赖（DAG 守卫，FR-12）；
+ * 否则 → 等并发空位（WIP，FR-13）。非排队态返回 undefined。
+ */
+export function subtaskWait(task: Task, sub: Subtask): SubtaskWait | undefined {
+  if (task.status !== 'in-progress') return undefined
+  const queued = sub.status === 'pending' || (sub.status === 'in-progress' && sub.sessionId === undefined)
+  if (!queued) return undefined
+  const byId = new Map(task.subtasks.map(s => [s.id, s]))
+  const blockers: string[] = []
+  for (const dep of sub.deps) {
+    const target = byId.get(dep)
+    // 未知 dep 与宿主侧 fail-closed 语义一致：视作未满足
+    if (target === undefined || (target.status !== 'done' && target.status !== 'review')) blockers.push(target?.title ?? dep)
+  }
+  if (blockers.length > 0) return { kind: 'deps', blockers }
+  return { kind: 'wip', blockers: [] }
 }
 
 /** 距现在的相对时间。 */

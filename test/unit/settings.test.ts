@@ -1,20 +1,20 @@
 /**
- * 全局模型设置：形状校验、持久化存储、留痕标签（§PLAN-MODEL）。
+ * 全局设置（模型两槽 + 调度并发）：形状校验、持久化存储、留痕标签（§PLAN-MODEL / FR-13）。
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_MODEL_SETTINGS, ModelSettingsStore, modelLabel, validateModelSettings } from '../../src/host/settings.ts'
+import { DEFAULT_GLOBAL_SETTINGS, GlobalSettingsStore, modelLabel, validateGlobalSettings } from '../../src/host/settings.ts'
 import { cleanup, tempDir } from '../helpers.ts'
 
-describe('validateModelSettings（fail-closed 形状校验）', () => {
+describe('validateGlobalSettings（fail-closed 形状校验）', () => {
   it('两槽全 null = 默认（跟随宿主）', () => {
-    expect(validateModelSettings({})).toEqual(DEFAULT_MODEL_SETTINGS)
-    expect(validateModelSettings({ decompose: null, execution: null })).toEqual(DEFAULT_MODEL_SETTINGS)
+    expect(validateGlobalSettings({})).toEqual(DEFAULT_GLOBAL_SETTINGS)
+    expect(validateGlobalSettings({ decompose: null, execution: null })).toEqual(DEFAULT_GLOBAL_SETTINGS)
   })
 
   it('合法 selection 透传并 trim', () => {
-    const next = validateModelSettings({
+    const next = validateGlobalSettings({
       decompose: { provider: ' deepseek ', model: ' deepseek-reasoner ', reasoningEffort: ' high ' },
       execution: { provider: 'ollama', model: 'qwen3:8b' },
     })
@@ -23,14 +23,24 @@ describe('validateModelSettings（fail-closed 形状校验）', () => {
   })
 
   it('拒绝：非对象 / 未知槽位 / selection 未知字段 / 空字符串', () => {
-    expect(() => validateModelSettings('nope')).toThrow()
-    expect(() => validateModelSettings(null)).toThrow()
-    expect(() => validateModelSettings([])).toThrow()
-    expect(() => validateModelSettings({ decompose: null, other: null })).toThrow(/未知字段/)
-    expect(() => validateModelSettings({ decompose: { provider: 'p', model: 'm', extra: 1 } })).toThrow(/未知字段/)
-    expect(() => validateModelSettings({ decompose: { provider: '', model: 'm' } })).toThrow(/provider/)
-    expect(() => validateModelSettings({ execution: { provider: 'p' } })).toThrow(/model/)
-    expect(() => validateModelSettings({ execution: { provider: 'p', model: 'm', reasoningEffort: ' ' } })).toThrow(/reasoningEffort/)
+    expect(() => validateGlobalSettings('nope')).toThrow()
+    expect(() => validateGlobalSettings(null)).toThrow()
+    expect(() => validateGlobalSettings([])).toThrow()
+    expect(() => validateGlobalSettings({ decompose: null, other: null })).toThrow(/未知字段/)
+    expect(() => validateGlobalSettings({ decompose: { provider: 'p', model: 'm', extra: 1 } })).toThrow(/未知字段/)
+    expect(() => validateGlobalSettings({ decompose: { provider: '', model: 'm' } })).toThrow(/provider/)
+    expect(() => validateGlobalSettings({ execution: { provider: 'p' } })).toThrow(/model/)
+    expect(() => validateGlobalSettings({ execution: { provider: 'p', model: 'm', reasoningEffort: ' ' } })).toThrow(/reasoningEffort/)
+  })
+
+  it('并发上限（FR-13）：1–8 整数合法，越界/非整数拒绝', () => {
+    expect(validateGlobalSettings({ maxConcurrentSubtasks: 1 }).maxConcurrentSubtasks).toBe(1)
+    expect(validateGlobalSettings({ maxConcurrentSubtasks: 8 }).maxConcurrentSubtasks).toBe(8)
+    expect(validateGlobalSettings({}).maxConcurrentSubtasks).toBeUndefined()
+    expect(() => validateGlobalSettings({ maxConcurrentSubtasks: 0 })).toThrow(/maxConcurrentSubtasks/)
+    expect(() => validateGlobalSettings({ maxConcurrentSubtasks: 9 })).toThrow(/maxConcurrentSubtasks/)
+    expect(() => validateGlobalSettings({ maxConcurrentSubtasks: 2.5 })).toThrow(/maxConcurrentSubtasks/)
+    expect(() => validateGlobalSettings({ maxConcurrentSubtasks: '3' })).toThrow(/maxConcurrentSubtasks/)
   })
 })
 
@@ -44,23 +54,37 @@ describe('modelLabel（留痕标签）', () => {
   })
 })
 
-describe('ModelSettingsStore（原子落盘 + 损坏回退）', () => {
+describe('GlobalSettingsStore（原子落盘 + 损坏回退）', () => {
   it('缺文件 load → 默认；update 落盘可回读', async () => {
     const dir = await tempDir()
     try {
       const file = path.join(dir, 'settings.json')
-      const store = new ModelSettingsStore(file)
+      const store = new GlobalSettingsStore(file)
       await store.load()
-      expect(store.get()).toEqual(DEFAULT_MODEL_SETTINGS)
+      expect(store.get()).toEqual(DEFAULT_GLOBAL_SETTINGS)
       const next = await store.update({ execution: { provider: 'deepseek', model: 'deepseek-chat' } })
       expect(next.execution).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
       // 回读磁盘
       const onDisk = JSON.parse(await readFile(file, 'utf8'))
       expect(onDisk.execution.model).toBe('deepseek-chat')
       // 新实例读回
-      const fresh = new ModelSettingsStore(file)
+      const fresh = new GlobalSettingsStore(file)
       await fresh.load()
       expect(fresh.get().execution?.model).toBe('deepseek-chat')
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
+  it('并发上限随 settings.json 持久化（重启回读）', async () => {
+    const dir = await tempDir()
+    try {
+      const file = path.join(dir, 'settings.json')
+      const store = new GlobalSettingsStore(file)
+      await store.update({ maxConcurrentSubtasks: 4 })
+      const fresh = new GlobalSettingsStore(file)
+      await fresh.load()
+      expect(fresh.get().maxConcurrentSubtasks).toBe(4)
     } finally {
       await cleanup(dir)
     }
@@ -71,9 +95,9 @@ describe('ModelSettingsStore（原子落盘 + 损坏回退）', () => {
     try {
       const file = path.join(dir, 'settings.json')
       await writeFile(file, '{broken json', 'utf8')
-      const store = new ModelSettingsStore(file)
+      const store = new GlobalSettingsStore(file)
       await store.load()
-      expect(store.get()).toEqual(DEFAULT_MODEL_SETTINGS)
+      expect(store.get()).toEqual(DEFAULT_GLOBAL_SETTINGS)
       expect(store.lastLoadError).toBeTruthy()
       await expect(store.update({ execution: { provider: '' } })).rejects.toThrow()
       await store.update({ decompose: { provider: 'p', model: 'm' } })
