@@ -30,6 +30,8 @@ import type { EngineConfig } from '../engine.ts'
 import { LedgerStore } from '../ledger.ts'
 import { GlobalSettingsStore } from '../settings.ts'
 import { TemplateStore } from '../templates.ts'
+import { CronScheduler, validateScheduleSpec } from '../cron.ts'
+import type { CronScheduleSpec } from '../cron.ts'
 import { createSseStream, handleTaskflowRequest, isTrustedRequest } from '../http.ts'
 import type { ModelCatalog, ModelCatalogGroup } from '../../protocol/types.ts'
 import { DshSessionAdapter } from './adapter.ts'
@@ -50,6 +52,16 @@ export interface TaskflowPluginConfig {
   sessionDefaultPermission?: string
   /** 宿主默认工作区（pins.workspace 为空时的落点）。 */
   defaultWorkspace?: string
+  /**
+   * cron 定时建卡（FR-17）：`[{ id, cron, title, description, acceptance?, pins?, autoStart? }]`，
+   * 5 字段标准 cron（分 时 日 月 周），到点自动 createTask（幂等，重启不重发）。
+   */
+  schedules?: CronScheduleSpec[]
+  /**
+   * webhook 建卡令牌（FR-17）：设置后 POST /api/taskflow/hook 需带
+   * `?token=` 或 `x-taskflow-token` 头才受理（配合 trustedHosts 供局域网自动化）。
+   */
+  webhookToken?: string
 }
 
 export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
@@ -97,6 +109,39 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
     }
   }, 'taskflow.engine()')
 
+  // FR-17 cron 定时建卡：配置错逐条告警并跳过，不拖垮宿主；到点 dispatch（requestId 幂等）
+  ctx.effect(() => {
+    const schedules: CronScheduleSpec[] = []
+    for (const [index, raw] of (config.schedules ?? []).entries()) {
+      try {
+        schedules.push(validateScheduleSpec(raw, `sched${index}`))
+      } catch (error) {
+        ctx.logger.warn(`taskflow: invalid schedule #${index}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    if (schedules.length === 0) return () => undefined
+    const scheduler = new CronScheduler(
+      schedules,
+      async (spec, requestId) => {
+        await engine.dispatch({
+          type: 'createTask',
+          requestId,
+          title: spec.title,
+          description: spec.description ?? '',
+          ...(spec.acceptance !== undefined && spec.acceptance.length > 0
+            ? { acceptance: spec.acceptance.map(text => ({ text })) }
+            : {}),
+          ...(spec.objective !== undefined ? { objective: spec.objective } : {}),
+          ...(spec.pins !== undefined ? { pins: spec.pins } : {}),
+          ...(spec.autoStart !== undefined ? { autoStart: spec.autoStart } : {}),
+          ...(spec.maxRounds !== undefined && spec.maxRounds !== null ? { maxRounds: spec.maxRounds } : {}),
+        })
+      },
+      { onTickError: error => ctx.logger.warn(`taskflow: schedule fire failed: ${error instanceof Error ? error.message : String(error)}`) },
+    )
+    return () => scheduler.dispose()
+  }, 'taskflow.schedules()')
+
   ctx.effect(() => {
     const table = routeTable(ctx)
     const disposeRoutes = [
@@ -106,6 +151,7 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       table.register({ kind: 'exact', path: '/api/taskflow/settings', handler: apiHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/models', handler: apiHandler }),
       table.register({ kind: 'exact', path: '/api/taskflow/templates', handler: apiHandler }),
+      table.register({ kind: 'exact', path: '/api/taskflow/hook', handler: apiHandler }),
       // 漏注册 = dsh 路由器直接 404，永远到不了 apiHandler（真机 2026-09-11 事故：交付物预览全挂）
       table.register({ kind: 'exact', path: '/api/taskflow/artifact/preview', handler: apiHandler }),
     ]
@@ -129,7 +175,10 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
         persistSettings: next => settings.update(next),
         // 模板库读写口（FR-19；PUT 全表先校验后落盘）
         templates: { get: () => templates.get(), update: raw => templates.update(raw) },
+        // webhook 建卡令牌（FR-17）：配置后 ?token= 或 x-taskflow-token 头须匹配
+        webhookToken: config.webhookToken,
         query: url.searchParams,
+        headers: req.headers,
       })
       res.writeHead(result.status, result.headers)
       res.end(result.body)

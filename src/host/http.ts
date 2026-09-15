@@ -83,7 +83,10 @@ export async function handleTaskflowRequest(
     models?: () => Promise<ModelCatalog>
     persistSettings?: (settings: GlobalSettings) => Promise<unknown>
     templates?: { get: () => TaskTemplate[]; update: (raw: unknown) => Promise<TaskTemplate[]> }
+    /** webhook 建卡令牌（FR-17）；提供时 POST /hook 校验 ?token= 或 x-taskflow-token。 */
+    webhookToken?: string
     query?: URLSearchParams
+    headers?: IncomingHttpHeaders
   } = {},
 ): Promise<HttpResult> {
   if (method === 'GET' && pathname === '/api/taskflow/state') {
@@ -170,6 +173,31 @@ export async function handleTaskflowRequest(
     } catch (error) {
       return jsonError(500, `templates persist failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+  }
+  if (method === 'POST' && pathname === '/api/taskflow/hook') {
+    // FR-17 webhook 建卡：令牌门（配置了 webhookToken 才强制）→ 复用 createTask action 全套守卫
+    if (opts.webhookToken !== undefined) {
+      const presented = opts.query?.get('token') ?? (typeof opts.headers?.['x-taskflow-token'] === 'string' ? opts.headers['x-taskflow-token'] : undefined)
+      if (presented !== opts.webhookToken) return jsonError(403, 'webhook token mismatch.')
+    }
+    if (body === undefined) return jsonError(400, 'request body required (JSON).')
+    let payload: Record<string, unknown>
+    try {
+      payload = JSON.parse(body) as Record<string, unknown>
+    } catch {
+      return jsonError(400, 'request body must be valid JSON.')
+    }
+    const action: Record<string, unknown> = {
+      type: 'createTask',
+      requestId: `hook_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: payload.title,
+      description: payload.description ?? '',
+    }
+    for (const key of ['objective', 'acceptance', 'pins', 'autoStart', 'maxRounds'] as const) {
+      if (payload[key] !== undefined) action[key] = payload[key]
+    }
+    const result = await engine.dispatch(action)
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(result) }
   }
   if (method === 'GET' && pathname === '/api/taskflow/artifact/preview') {
     const taskId = opts.query?.get('taskId') ?? ''

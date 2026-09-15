@@ -300,3 +300,53 @@ describe('模板库端点（FR-19）', () => {
     expect(saved).toHaveLength(1)
   })
 })
+
+describe('webhook 建卡端点（FR-17）', () => {
+  it('无令牌配置：POST /hook 透传 createTask（复用 action 守卫）', async () => {
+    const { engine, dispatchCalls } = fakeEngine()
+    const ok = await handleTaskflowRequest(
+      engine,
+      'POST',
+      '/api/taskflow/hook',
+      JSON.stringify({ title: 'CI 通知', description: '构建失败', acceptance: [{ text: '排查结论' }] }),
+    )
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body).ok).toBe(true)
+    expect(dispatchCalls).toHaveLength(1)
+    const action = dispatchCalls[0] as { type: string; title: string; requestId: string }
+    expect(action.type).toBe('createTask')
+    expect(action.title).toBe('CI 通知')
+    expect(action.requestId).toMatch(/^hook_/)
+
+    const bad = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', 'not json')
+    expect(bad.status).toBe(400)
+    const noBody = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', undefined)
+    expect(noBody.status).toBe(400)
+  })
+
+  it('配置令牌后：token 不符 403（query / 头任一可过）', async () => {
+    const { engine } = fakeEngine()
+    const denied = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', JSON.stringify({ title: 't' }), {
+      webhookToken: 'secret',
+    })
+    expect(denied.status).toBe(403)
+
+    const wrong = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', JSON.stringify({ title: 't' }), {
+      webhookToken: 'secret',
+      query: new URLSearchParams({ token: 'nope' }),
+    })
+    expect(wrong.status).toBe(403)
+
+    const viaQuery = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', JSON.stringify({ title: 't' }), {
+      webhookToken: 'secret',
+      query: new URLSearchParams({ token: 'secret' }),
+    })
+    expect(viaQuery.status).toBe(200)
+
+    const viaHeader = await handleTaskflowRequest(engine, 'POST', '/api/taskflow/hook', JSON.stringify({ title: 't' }), {
+      webhookToken: 'secret',
+      headers: { 'x-taskflow-token': 'secret' },
+    })
+    expect(viaHeader.status).toBe(200)
+  })
+})
