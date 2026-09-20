@@ -59,6 +59,7 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
       const body = init?.body !== undefined ? String(init.body) : undefined
       const result = await handleTaskflowRequest(engine, init?.method ?? 'GET', url.pathname, body, {
         templates: { get: () => templateStore.get(), update: raw => templateStore.update(raw) },
+        query: url.searchParams,
       })
       return {
         ok: result.status < 400,
@@ -205,49 +206,63 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(text).toContain('批语')
   })
 
-  it('新建抽屉：必填校验与验收留空提示', async () => {
+  it('新建弹窗（Bento 单列）：必填校验 + 能力选择（FR-22）+ 工作目录选择器（FR-21）', async () => {
     const doc = dom.window.document
     ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement).click()
     const createBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('新建任务'))
     ;(createBtn as HTMLElement).click()
-    await waitFor(() => doc.querySelector('.tf-drawer') !== null)
+    await waitFor(() => doc.querySelector('.tf-create-modal') !== null)
     const submit = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('创建'))
     expect((submit as HTMLButtonElement).disabled).toBe(true)
-    expect(doc.querySelector('.tf-drawer-body')!.textContent).toContain('留空由 AI 补全')
-    // 执行模式单选（§7.1b）：默认完全权限
+    expect((doc.querySelector('#tf-ac') as HTMLTextAreaElement).placeholder).toContain('留空由 AI 补全')
+    // 单列两格：任务 / 执行
+    expect(doc.querySelector('[aria-label="任务内容"]') !== null).toBe(true)
+    expect(doc.querySelector('[aria-label="执行设置"]') !== null).toBe(true)
+    // 执行模式：胶囊滑选，默认完全权限
     expect(doc.querySelector('[aria-label="执行模式"]')).toBeTruthy()
-    expect([...doc.querySelectorAll('.tf-mode-card')].map(el => el.className).join(',')).toContain('active')
-
-    // —— FR-19 模板：种子 chips 出现 → 点「修 Bug」预填描述/验收 → 存为模板 → chip 出现 → 两段式删除 ——
-    await waitFor(() => doc.querySelectorAll('.tf-tpl-chip').length >= 4)
-    const bugChip = [...doc.querySelectorAll('.tf-tpl-chip')].find(el => el.textContent === '修 Bug')
-    ;(bugChip as HTMLElement).click()
+    const autoOpt = doc.querySelector('[aria-label="执行模式"] [role="radio"][aria-checked="true"]')
+    expect(autoOpt?.textContent).toContain('完全权限')
+    // FR-22 能力：chip 单选可取消；不往编辑框写任何文字
+    const bugPill = [...doc.querySelectorAll('.tf-pill')].find(el => el.textContent === '修 Bug')!
+    ;(bugPill as HTMLElement).click()
+    await waitFor(() => bugPill.className.includes('active'))
+    expect((doc.querySelector('#tf-desc') as HTMLTextAreaElement).value).toBe('')
+    ;(bugPill as HTMLElement).click()
+    await waitFor(() => !bugPill.className.includes('active'))
+    // 必填项
+    const nativeInputSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
     const nativeAreaSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!
-    await waitFor(() => (doc.querySelector('#tf-desc') as HTMLTextAreaElement).value.includes('复现步骤'))
-    expect((doc.querySelector('#tf-ac') as HTMLTextAreaElement).value).toContain('回归测试')
-    void nativeAreaSetter
-    // 存为模板
-    const saveTplBtn = [...doc.querySelectorAll('button')].find(b => b.textContent?.includes('存为模板'))
-    ;(saveTplBtn as HTMLElement).click()
-    await new Promise(r => setTimeout(r, 200))
-    await waitFor(() => doc.querySelector('.tf-tpl-save-name') !== null)
-    const tplName = doc.querySelector('.tf-tpl-save-name') as HTMLInputElement
-    const nativeInputSetter2 = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!
-    nativeInputSetter2.call(tplName, '我的检查单')
-    tplName.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
-    const doSaveTpl = [...doc.querySelectorAll('.tf-tpl-save button')].find(b => b.textContent?.includes('保存模板'))
-    await waitFor(() => !(doSaveTpl as HTMLButtonElement).disabled)
-    ;(doSaveTpl as HTMLElement).click()
-    await waitFor(() => [...doc.querySelectorAll('.tf-tpl-chip')].some(el => el.textContent === '我的检查单'))
-    // 删除该模板：✕ → 「确认删?」→ chip 消失
-    const myWrap = [...doc.querySelectorAll('.tf-tpl-chip-wrap')].find(el => el.querySelector('.tf-tpl-chip')?.textContent === '我的检查单')!
-    ;(myWrap.querySelector('.tf-tpl-del') as HTMLElement).click()
-    await waitFor(() => myWrap.querySelector('.tf-tpl-del.sure') !== null)
-    ;(myWrap.querySelector('.tf-tpl-del.sure') as HTMLElement).click()
-    await waitFor(() => ![...doc.querySelectorAll('.tf-tpl-chip')].some(el => el.textContent === '我的检查单'))
-    // 收起抽屉，还回看板（后续用例从看板起步）
-    ;(doc.querySelector('.tf-drawer-head [aria-label="关闭"]') as HTMLElement).click()
-    await waitFor(() => doc.querySelector('.tf-drawer') === null)
+    const titleInput = doc.querySelector('#tf-title') as HTMLInputElement
+    nativeInputSetter.call(titleInput, '示例任务')
+    titleInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    const descInput = doc.querySelector('#tf-desc') as HTMLTextAreaElement
+    nativeAreaSetter.call(descInput, '示例描述')
+    descInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    // FR-21 工作目录：选择器浏览 → 下钻 → 选这个目录 → 展示路径并进入创建载荷
+    ;([...doc.querySelectorAll('.tf-ws-toggle')][0] as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-ws-picker') !== null)
+    await waitFor(() => doc.querySelectorAll('.tf-ws-item').length > 0)
+    const firstDir = doc.querySelectorAll('.tf-ws-item')[0] as HTMLElement
+    const firstDirName = firstDir.textContent!
+    ;(firstDir).click()
+    await waitFor(() => (doc.querySelector('.tf-ws-crumb') as HTMLElement).textContent!.endsWith(firstDirName.replace(/\/$/, '')))
+    ;([...doc.querySelectorAll('.tf-ws-picker button')].find(b => b.textContent === '选这个目录') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-ws-picker') === null)
+    expect(doc.querySelector('.tf-ws-toggle')!.textContent).toContain(firstDirName.replace(/\/$/, ''))
+    // 提交：任务带 capability 与 workspace（关掉自动开工，不占 WIP 影响后续用例）
+    ;(doc.querySelector('[aria-label="执行设置"] input[type="checkbox"]') as HTMLElement).click()
+    const bugPill2 = [...doc.querySelectorAll('.tf-pill')].find(el => el.textContent === '修 Bug')!
+    ;(bugPill2 as HTMLElement).click()
+    await waitFor(() => bugPill2.getAttribute('aria-pressed') === 'true')
+    ;(submit as HTMLElement).click()
+    await waitFor(() => {
+      const task = engine.getState().ledger.tasks.find(t => t.title === '示例任务')
+      if (task !== undefined) console.log('DEBUG-TASK', JSON.stringify({ cap: task.capability, ws: task.contract.pins.workspace, dir: firstDirName }))
+      return task !== undefined && task.capability === 'bugfix' && task.contract.pins.workspace.endsWith(firstDirName.replace(/\/$/, ''))
+    }, { timeout: 5000 })
+    // 收起弹窗，还回看板（后续用例从看板起步）
+    ;(doc.querySelector('.tf-create-modal .tf-modal-head [aria-label="关闭"]') as HTMLElement).click()
+    await waitFor(() => doc.querySelector('.tf-create-modal') === null)
   })
 
   it('FR-20 周期统计浮层：工具栏入口 → 指标网格出现（含一次通过率与拆解采纳率口径注脚）', async () => {

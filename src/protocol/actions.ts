@@ -8,6 +8,7 @@
  * @module dsh-taskflow/protocol
  */
 
+import { CAPABILITIES } from './types.ts'
 import type { AcceptanceItem } from './types.ts'
 
 export type TaskflowAction =
@@ -34,6 +35,8 @@ export interface CreateTaskAction {
   acceptance?: Array<{ text: string }>
   objective?: string
   pins?: Partial<{ workspace: string; presetId: string | null; permission: string; executionMode: import('./types.ts').ExecutionMode }>
+  /** 能力预设（FR-22，可选）：id 须在 CAPABILITIES 内。 */
+  capability?: string
   autoStart?: boolean
   /** 创建后立即触发拆解（默认 true，对应 T2 的自动形态）。 */
   autoDecompose?: boolean
@@ -206,6 +209,9 @@ export function validateActionShape(action: unknown): TaskflowAction {
       if (action.objective !== undefined) requireString(action.objective, 'objective', { max: 2000 })
       validateAcceptanceInput(action.acceptance, 'acceptance', { optional: true })
       validatePinsInput(action.pins, { optional: true })
+      if (action.capability !== undefined && !CAPABILITIES.some(c => c.id === action.capability)) {
+        throw new ActionFormatError(`capability must be one of: ${CAPABILITIES.map(c => c.id).join(', ')}.`)
+      }
       validateAutoStartFlag(action.autoStart)
       validateAutoDecomposeFlag(action.autoDecompose)
       validateMaxRounds(action.maxRounds)

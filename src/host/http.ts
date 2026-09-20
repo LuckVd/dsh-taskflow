@@ -16,6 +16,8 @@
  */
 
 import type { IncomingHttpHeaders } from 'node:http'
+import { readdirSync } from 'node:fs'
+import path from 'node:path'
 import { MAX_ACTION_BYTES } from '../protocol/types.ts'
 import type { GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import { isArtifactPreviewError } from './artifacts.ts'
@@ -199,6 +201,9 @@ export async function handleTaskflowRequest(
     const result = await engine.dispatch(action)
     return { status: 200, headers: JSON_HEADERS, body: JSON.stringify(result) }
   }
+  if (method === 'GET' && pathname === '/api/taskflow/dirs') {
+    return listDirectories(opts.query?.get('path') ?? '/')
+  }
   if (method === 'GET' && pathname === '/api/taskflow/artifact/preview') {
     const taskId = opts.query?.get('taskId') ?? ''
     const path = opts.query?.get('path') ?? ''
@@ -248,3 +253,34 @@ export function createSseStream(
 function jsonError(status: number, message: string): HttpResult {
   return { status, headers: JSON_HEADERS, body: JSON.stringify({ ok: false, error: message }) }
 }
+
+/**
+ * 工作目录浏览（FR-21）：列出某绝对路径下的子目录（跳过隐藏目录，上限 200）。
+ * 只读、只回目录名与拼接路径——不做任何写操作，供创建表单的目录选择器使用。
+ */
+function listDirectories(rawPath: string | undefined): HttpResult {
+  const requested = rawPath ?? '/'
+  if (!requested.startsWith('/')) return jsonError(400, 'path must be an absolute path.')
+  const target = path.resolve(requested)
+  let entries: string[]
+  try {
+    entries = readdirSync(target, { withFileTypes: true })
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => e.name)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 200)
+  } catch (error) {
+    return jsonError(400, `cannot list ${target}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const parent = path.dirname(target)
+  return {
+    status: 200,
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      path: target,
+      parent: parent === target ? null : parent,
+      dirs: entries.map(name => ({ name, path: path.join(target, name) })),
+    }),
+  }
+}
+

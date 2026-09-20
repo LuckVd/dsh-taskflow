@@ -39,7 +39,8 @@ import {
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
 import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
-import type { AcceptanceItem, Evidence, Subtask, Task, TaskTemplate } from '../protocol/types.ts'
+import { CAPABILITIES } from '../protocol/types.ts'
+import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
 type TabId = 'contract' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
 
@@ -373,10 +374,9 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
       )}
 
       {createOpen && (
-        <CreateDrawer
+        <CreateModal
           onClose={() => setCreateOpen(false)}
           dispatch={dispatch}
-          transport={transport}
         />
       )}
       {selected !== null && (
@@ -566,102 +566,77 @@ function EmptyBoard({ onCreate }: { onCreate: () => void }): JSX.Element {
 
 // —— 新建抽屉（FR-01/§4.1）——
 
-function CreateDrawer({
+// —— 新建弹窗（FR-01/§4.1 + FR-21/FR-22，Bento 单列）——
+// 能力（FR-22）：只选不写——选定后由 Host 调整拆解/验收口径，正文不出现预设文字。
+// 工作目录（FR-21）：目录选择器（/api/taskflow/dirs 浏览），不要求手填。
+
+const CAPABILITY_CHOICES = CAPABILITIES
+const ROUND_CHOICES: Array<{ value: number | null; label: string }> = [
+  { value: 30, label: '30' },
+  { value: 60, label: '60' },
+  { value: 100, label: '100' },
+  { value: 150, label: '150' },
+  { value: null, label: '无限' },
+]
+
+function CreateModal({
   onClose,
   dispatch,
-  transport,
 }: {
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
-  transport: TaskflowTransport
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [objective, setObjective] = useState('')
   const [acceptanceText, setAcceptanceText] = useState('')
-  /** 执行模式（§7.1b）：默认完全权限（用户拍板 D1），映射为 pins 两轴组合。 */
+  /** 执行模式（§7.1b）：胶囊滑选，默认完全权限（用户拍板 D1）。 */
   const [mode, setMode] = useState<'auto' | 'approval'>('auto')
+  /** 能力预设（FR-22）：单选可取消；只影响 Host 侧口径。 */
+  const [capability, setCapability] = useState<string | null>(null)
+  /** 工作目录（FR-21）：空 = 宿主默认工作区。 */
+  const [workspace, setWorkspace] = useState('')
+  const [wsPickerOpen, setWsPickerOpen] = useState(false)
+  const [wsBrowse, setWsBrowse] = useState('/')
+  const [wsDirs, setWsDirs] = useState<Array<{ name: string; path: string }>>([])
+  const [wsParent, setWsParent] = useState<string | null>(null)
+  const [wsError, setWsError] = useState<string | null>(null)
+  /** 迭代上限（FR-22 改版）：预设档位单选，null = 无限。 */
+  const [maxRounds, setMaxRounds] = useState<number | null>(null)
   const [autoStart, setAutoStart] = useState(true)
-  /** 迭代上限（留空 = 不限：任务一直跑到人工验收为止）。 */
-  const [maxRounds, setMaxRounds] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // 模板（FR-19）：加载失败静默隐藏（创建流程不因模板库缺失而卡住）
-  const [templates, setTemplates] = useState<TaskTemplate[] | null>(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-  const [saveTplOpen, setSaveTplOpen] = useState(false)
-  const [saveTplName, setSaveTplName] = useState('')
-  const [tplBusy, setTplBusy] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
+  const browseDirs = async (target: string): Promise<void> => {
+    setWsError(null)
     try {
-      transport
-        .getTemplates()
-        .then(list => {
-          if (!cancelled) setTemplates(list)
-        })
-        .catch(() => undefined)
-    } catch {
-      // transport 未提供模板口（旧宿主 bundle 混装）：隐藏模板区，创建流程不受影响
-    }
-    return () => {
-      cancelled = true
-    }
-  }, [transport])
-
-  /** 应用模板到表单（只覆盖模板提供的字段；标题为空占位不覆盖已填内容）。 */
-  const applyTemplate = (template: TaskTemplate): void => {
-    if (template.title.trim().length > 0) setTitle(template.title)
-    setDescription(template.description)
-    setAcceptanceText(template.acceptance.join('\n'))
-    if (template.pins?.executionMode !== undefined) setMode(template.pins.executionMode)
-    setConfirmDeleteId(null)
-  }
-
-  const deleteTemplate = async (id: string): Promise<void> => {
-    if (templates === null) return
-    setTplBusy(true)
-    try {
-      const saved = await transport.saveTemplates(templates.filter(t => t.id !== id))
-      setTemplates(saved)
-    } catch (tplError) {
-      setError(tplError instanceof Error ? tplError.message : String(tplError))
-    } finally {
-      setTplBusy(false)
-      setConfirmDeleteId(null)
+      const response = await fetch(`/api/taskflow/dirs?path=${encodeURIComponent(target)}`)
+      const body = (await response.json()) as { ok?: boolean; path?: string; parent?: string | null; dirs?: Array<{ name: string; path: string }>; error?: string }
+      if (!response.ok || body.path === undefined) throw new Error(body.error ?? `HTTP ${response.status}`)
+      setWsBrowse(body.path)
+      setWsDirs(body.dirs ?? [])
+      setWsParent(body.parent ?? null)
+    } catch (browseError) {
+      setWsError(browseError instanceof Error ? browseError.message : String(browseError))
     }
   }
 
-  const saveAsTemplate = async (): Promise<void> => {
-    if (templates === null || saveTplName.trim().length === 0) return
-    const acceptance = acceptanceText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-    if (title.trim().length === 0 && description.trim().length === 0 && acceptance.length === 0) return
-    setTplBusy(true)
-    try {
-      const saved = await transport.saveTemplates([
-        ...templates,
-        {
-          id: `tpl_${Math.random().toString(36).slice(2, 10)}`,
-          name: saveTplName.trim().slice(0, 60),
-          title: title.trim().slice(0, 120),
-          description: description.slice(0, 4000),
-          acceptance: acceptance.slice(0, 20).map(text => text.slice(0, 2000)),
-          pins: { executionMode: mode },
-        },
-      ])
-      setTemplates(saved)
-      setSaveTplOpen(false)
-      setSaveTplName('')
-    } catch (tplError) {
-      setError(tplError instanceof Error ? tplError.message : String(tplError))
-    } finally {
-      setTplBusy(false)
+  const togglePicker = (): void => {
+    if (wsPickerOpen) {
+      setWsPickerOpen(false)
+      return
     }
+    setWsPickerOpen(true)
+    const start = workspace.trim().length > 0 ? workspace.trim() : '/'
+    void browseDirs(start)
   }
+
+  // 提交门禁：禁用时给原因，不再只是静默灰按钮。
+  const submitBlocked = title.trim().length === 0 ? '标题必填'
+    : description.trim().length === 0 ? '描述必填'
+    : null
+  const dialogRef = useRef<HTMLElement>(null)
+  useDialogA11y(dialogRef, onClose)
 
   const submit = async (): Promise<void> => {
     setBusy(true)
@@ -671,18 +646,19 @@ function CreateDrawer({
       .map(line => line.trim())
       .filter(line => line.length > 0)
       .map(text => ({ text }))
-    const rounds = maxRounds.trim() === '' ? null : Math.min(99, Math.max(1, Number.parseInt(maxRounds, 10)))
     const result = await dispatch({
       type: 'createTask',
       title,
       description,
       acceptance: acceptance.length > 0 ? acceptance : undefined,
       ...(objective.trim().length > 0 ? { objective: objective.trim() } : {}),
-      ...(rounds === null ? {} : { maxRounds: rounds }),
+      ...(maxRounds !== null ? { maxRounds } : {}),
       pins: {
         permission: mode === 'auto' ? 'workspace-write' : 'read-only',
         executionMode: mode,
+        ...(workspace.trim().length > 0 ? { workspace: workspace.trim() } : {}),
       },
+      ...(capability !== null ? { capability } : {}),
       autoStart,
     })
     setBusy(false)
@@ -691,143 +667,149 @@ function CreateDrawer({
   }
 
   return (
-    <Drawer title="新建任务" onClose={onClose}>
-      <div className="tf-form">
-        {templates !== null && templates.length > 0 && (
-          <div className="tf-field">
-            <label>从模板开始（FR-19）</label>
-            <div className="tf-tpl-row" role="group" aria-label="任务模板">
-              {templates.map(template => (
-                <span key={template.id} className="tf-tpl-chip-wrap">
+    <div className="tf-overlay tf-overlay-center" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+      <aside
+        className="tf-modal tf-create-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="新建任务"
+        ref={dialogRef}
+        tabIndex={-1}
+      >
+        <header className="tf-modal-head">
+          <span className="tf-modal-title">新建任务</span>
+          <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
+        </header>
+        <div className="tf-modal-body">
+          {error !== null && <div className="tf-banner" role="alert">{error}</div>}
+          <div className="tf-bento">
+            {/* 格 1 · 任务 */}
+            <section className="tf-bento-cell" aria-label="任务内容">
+              <span className="tf-section-title">任务</span>
+              <div className="tf-field">
+                <label htmlFor="tf-title">标题 *</label>
+                <input id="tf-title" className="tf-input" maxLength={120} placeholder="一句话说清要做什么" value={title} onChange={e => setTitle(e.target.value)} />
+              </div>
+              <div className="tf-field">
+                <label htmlFor="tf-desc">描述 *</label>
+                <textarea id="tf-desc" className="tf-textarea" value={description} onChange={e => setDescription(e.target.value)} placeholder="把你的诉求写清楚；验收标准可以不给，AI 拆解时会补全建议稿" />
+              </div>
+              <div className="tf-field">
+                <label htmlFor="tf-obj">目标（可选）</label>
+                <input id="tf-obj" className="tf-input" value={objective} onChange={e => setObjective(e.target.value)} />
+              </div>
+              <div className="tf-field">
+                <label htmlFor="tf-ac">验收标准（可选，每行一条）</label>
+                <textarea id="tf-ac" className="tf-textarea" value={acceptanceText} onChange={e => setAcceptanceText(e.target.value)} placeholder={'留空由 AI 补全，例如：\n全部测试通过\nREADME 更新使用说明'} />
+              </div>
+              <div className="tf-field">
+                <label>能力（可选）</label>
+                <div className="tf-pill-row" role="group" aria-label="能力">
+                  {CAPABILITY_CHOICES.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className={`tf-pill${capability === c.id ? ' active' : ''}`}
+                      aria-pressed={capability === c.id}
+                      title={c.label}
+                      onClick={() => setCapability(capability === c.id ? null : c.id)}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+            {/* 格 2 · 执行 */}
+            <section className="tf-bento-cell" aria-label="执行设置">
+              <span className="tf-section-title">执行</span>
+              <div className="tf-field">
+                <label>执行模式</label>
+                <div className="tf-capsule" role="radiogroup" aria-label="执行模式">
+                  <span className={`tf-capsule-thumb${mode === 'approval' ? ' tf-capsule-right' : ''}`} aria-hidden="true" />
+                  <button type="button" role="radio" aria-checked={mode === 'auto'} className="tf-capsule-opt" onClick={() => setMode('auto')}>🔓 完全权限</button>
+                  <button type="button" role="radio" aria-checked={mode === 'approval'} className="tf-capsule-opt" onClick={() => setMode('approval')}>🔒 需要审批</button>
+                </div>
+              </div>
+              <div className="tf-field">
+                <label>工作目录（可选）</label>
+                <div className="tf-ws-row">
                   <button
                     type="button"
-                    className="tf-tpl-chip"
-                    disabled={tplBusy}
-                    title={template.acceptance.length > 0 ? `验收标准（${template.acceptance.length} 条）：\n${template.acceptance.join('\n')}` : '填入模板内容'}
-                    onClick={() => applyTemplate(template)}
+                    className={`tf-btn tf-ws-toggle${workspace.trim().length > 0 ? ' tf-ws-set' : ''}`}
+                    aria-expanded={wsPickerOpen}
+                    title={workspace.trim().length > 0 ? workspace : '宿主当前工作区'}
+                    onClick={() => togglePicker()}
                   >
-                    {template.name}
+                    <span className="tf-ws-toggle-text">{workspace.trim().length > 0 ? workspace : '宿主当前工作区'}</span>
                   </button>
-                  {confirmDeleteId === template.id ? (
-                    <button
-                      type="button"
-                      className="tf-tpl-del sure"
-                      disabled={tplBusy}
-                      aria-label={`确认删除模板 ${template.name}`}
-                      title="再点一次确认删除"
-                      onClick={() => void deleteTemplate(template.id)}
-                    >
-                      确认删?
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="tf-tpl-del"
-                      disabled={tplBusy}
-                      aria-label={`删除模板 ${template.name}`}
-                      title="删除模板"
-                      onClick={() => setConfirmDeleteId(template.id)}
-                    >
-                      ✕
-                    </button>
+                  {workspace.trim().length > 0 && (
+                    <button type="button" className="tf-btn" onClick={() => setWorkspace('')}>清除</button>
                   )}
-                </span>
-              ))}
-            </div>
-            <span className="tf-hint">点模板预填描述与验收标准；✕ 删除（两段式确认）。</span>
-          </div>
-        )}
-        <div className="tf-field">
-          <label htmlFor="tf-title">标题 *</label>
-          <input id="tf-title" className="tf-input" maxLength={120} placeholder="一句话说清要做什么" value={title} onChange={e => setTitle(e.target.value)} />
-        </div>
-        <div className="tf-field">
-          <label htmlFor="tf-desc">描述 *（AI 的主要输入）</label>
-          <textarea id="tf-desc" className="tf-textarea" value={description} onChange={e => setDescription(e.target.value)} placeholder="把你的诉求写清楚；验收标准可以不给，AI 拆解时会补全建议稿" />
-        </div>
-        <div className="tf-field">
-          <label htmlFor="tf-obj">目标（可选，缺省用标题）</label>
-          <input id="tf-obj" className="tf-input" value={objective} onChange={e => setObjective(e.target.value)} />
-        </div>
-        <div className="tf-field">
-          <label htmlFor="tf-ac">验收标准（可选，每行一条；留空由 AI 补全）</label>
-          <textarea id="tf-ac" className="tf-textarea" value={acceptanceText} onChange={e => setAcceptanceText(e.target.value)} placeholder={'例如：\n全部测试通过\nREADME 更新使用说明'} />
-        </div>
-        <div className="tf-field">
-          <label>执行模式</label>
-          <div className="tf-mode-row" role="radiogroup" aria-label="执行模式">
-            <label className={`tf-mode-card${mode === 'auto' ? ' active' : ''}`}>
-              <input type="radio" name="tf-exec-mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />
-              <span className="tf-mode-title">🔓 完全权限</span>
-              <span className="tf-mode-desc">AI 自动执行，工具提权自动放行，全程不打扰</span>
-            </label>
-            <label className={`tf-mode-card${mode === 'approval' ? ' active' : ''}`}>
-              <input type="radio" name="tf-exec-mode" checked={mode === 'approval'} onChange={() => setMode('approval')} />
-              <span className="tf-mode-title">🔒 需要审批</span>
-              <span className="tf-mode-desc">只读执行；写操作逐次通知你裁决</span>
-            </label>
-          </div>
-          {mode === 'auto'
-            ? <span className="tf-hint">⚠️ 完全权限：AI 的提权请求（含高危操作）将自动放行、不再询问，请确认任务目标与工作区可信。</span>
-            : <span className="tf-hint">审批模式：提权请求会出现在全局通知栏，可在看板中「完全放行」或「拒绝」。</span>}
-        </div>
-        <div className="tf-field">
-          <label htmlFor="tf-max-rounds">迭代上限（可选，留空 = 不限）</label>
-          <input
-            id="tf-max-rounds"
-            className="tf-input"
-            inputMode="numeric"
-            placeholder="不限（默认：跑到你验收为止）"
-            value={maxRounds}
-            onChange={e => setMaxRounds(e.target.value.replace(/[^\d]/g, ''))}
-          />
-          <span className="tf-hint">打回迭代超过上限时任务会暂停等你裁决；留空则一直迭代，直到验收通过或你取消。</span>
-        </div>
-        <div className="tf-field">
-          <label>
-            <input type="checkbox" checked={autoStart} onChange={e => setAutoStart(e.target.checked)} /> 拆解后自动开工
-          </label>
-        </div>
-        {error !== null && <div className="tf-banner" role="alert">{error}</div>}
-        {templates !== null && (
-          <div className="tf-field">
-            {saveTplOpen ? (
-              <div className="tf-tpl-save" role="group" aria-label="存为模板">
-                <input
-                  className="tf-input tf-tpl-save-name"
-                  value={saveTplName}
-                  maxLength={60}
-                  placeholder="模板名（如：发布检查）"
-                  aria-label="模板名"
-                  onChange={e => setSaveTplName(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="tf-btn tf-btn-primary"
-                  disabled={tplBusy || saveTplName.trim().length === 0 || (title.trim().length === 0 && description.trim().length === 0 && acceptanceText.trim().length === 0)}
-                  onClick={() => void saveAsTemplate()}
-                >
-                  {tplBusy ? '保存中…' : '保存模板'}
-                </button>
-                <button type="button" className="tf-btn" disabled={tplBusy} onClick={() => { setSaveTplOpen(false); setSaveTplName('') }}>取消</button>
+                </div>
+                {wsPickerOpen && (
+                  <div className="tf-ws-picker">
+                    <div className="tf-ws-crumb" title={wsBrowse}>{wsBrowse}</div>
+                    <div className="tf-ws-picker-actions">
+                      {wsParent !== null && <button type="button" className="tf-btn" onClick={() => void browseDirs(wsParent)}>上级</button>}
+                      <button
+                        type="button"
+                        className="tf-btn tf-btn-primary"
+                        onClick={() => { setWorkspace(wsBrowse); setWsPickerOpen(false) }}
+                      >
+                        选这个目录
+                      </button>
+                    </div>
+                    {wsError !== null && <span className="tf-hint" role="alert">{wsError}</span>}
+                    {wsError === null && wsDirs.length === 0 && <span className="tf-hint">（无子目录）</span>}
+                    <div className="tf-ws-list">
+                      {wsDirs.map(dir => (
+                        <button key={dir.path} type="button" className="tf-ws-item" onClick={() => void browseDirs(dir.path)}>
+                          {dir.name}/
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-            ) : (
-              <button type="button" className="tf-btn" onClick={() => setSaveTplOpen(true)}>把当前表单存为模板</button>
-            )}
-            <span className="tf-hint">存标题/描述/验收标准/执行模式；常用任务一次配置，下次一键预填。</span>
+              <div className="tf-field">
+                <label>迭代上限</label>
+                <div className="tf-pill-row" role="radiogroup" aria-label="迭代上限">
+                  {ROUND_CHOICES.map(choice => (
+                    <button
+                      key={choice.label}
+                      type="button"
+                      role="radio"
+                      aria-checked={maxRounds === choice.value}
+                      className={`tf-pill${maxRounds === choice.value ? ' active' : ''}`}
+                      onClick={() => setMaxRounds(choice.value)}
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="tf-field">
+                <label>
+                  <input type="checkbox" checked={autoStart} onChange={e => setAutoStart(e.target.checked)} /> 拆解后自动开工
+                </label>
+              </div>
+            </section>
           </div>
-        )}
-        <div className="tf-actions">
-          <button type="button" className="tf-btn tf-btn-primary" disabled={busy || title.trim().length === 0 || description.trim().length === 0} onClick={() => void submit()}>
-            {busy ? '创建中…' : '创建并开始拆解'}
-          </button>
-          <button type="button" className="tf-btn" onClick={onClose}>取消</button>
         </div>
-      </div>
-    </Drawer>
+        <footer className="tf-modal-foot tf-create-foot">
+          {submitBlocked !== null && <span className="tf-hint" role="status">⚠ {submitBlocked}</span>}
+          <div className="tf-actions">
+            <button type="button" className="tf-btn tf-btn-primary" disabled={busy || submitBlocked !== null} onClick={() => void submit()}>
+              {busy ? '创建中…' : '创建并开始拆解'}
+            </button>
+            <button type="button" className="tf-btn" onClick={onClose}>取消</button>
+          </div>
+        </footer>
+      </aside>
+    </div>
   )
 }
-
 // —— 周期统计浮层（FR-20：吞吐 / 一次通过率 / 平均迭代轮次 / 拆解采纳率） ——
 
 /** 统计口径的口径说明（面板脚注，和数字放一起才不误导）。 */
@@ -1193,6 +1175,12 @@ function ContractTab({ task }: { task: Task }): JSX.Element {
             {task.contract.pins.permission}
             {!task.permissionConfirmed && ' · 需确认'}
           </dd>
+          {task.contract.pins.workspace.trim().length > 0 && (
+            <>
+              <dt>工作目录</dt>
+              <dd><code className="tf-ws-path">{task.contract.pins.workspace}</code>（改动钉定区域）</dd>
+            </>
+          )}
         </dl>
       </div>
       <AcceptanceList items={task.contract.acceptance} title="任务级验收标准" />
@@ -1724,20 +1712,6 @@ function DecomposeTab({ task }: { task: Task }): JSX.Element {
 }
 
 // —— 通用 ——
-
-function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }): JSX.Element {
-  return (
-    <div className="tf-overlay" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
-      <aside className="tf-drawer" role="dialog" aria-label={title}>
-        <header className="tf-drawer-head">
-          <span className="tf-drawer-title">{title}</span>
-          <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
-        </header>
-        <div className="tf-drawer-body">{children}</div>
-      </aside>
-    </div>
-  )
-}
 
 function StatusDot({ status }: { status: Task['status'] | Subtask['status'] }): JSX.Element {
   const dot =

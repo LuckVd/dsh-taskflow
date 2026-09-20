@@ -37,6 +37,8 @@ export interface Task {
   createdAt: number
   updatedAt: number
   createdBy: 'human'
+  /** 能力预设（FR-22，可选）：创建时选定，Host 据此调整拆解/验收口径，不进正文。 */
+  capability?: string
   /** 拆解后自动开工（默认 true）。 */
   autoStart: boolean
   /** 权限确认门：pins.permission 高于会话默认时须人事先确认（§7.1）。 */
@@ -263,6 +265,45 @@ export interface ModelSettings {
 export interface GlobalSettings extends ModelSettings {
   /** 同时运行的子任务执行会话数（WIP 上限，1–8 整数；1 = 串行）。 */
   maxConcurrentSubtasks?: number
+}
+
+// —— 能力预设（FR-22，2026-09-20）——
+// 创建表单只提供选择，不提供文字编辑：选定后由 Host 在拆解提示词注入对应口径
+// （怎么拆、验收标准往哪个方向起草），正文与验收编辑框不出现任何预设文字。
+
+export interface CapabilityPreset {
+  id: string
+  /** chip 文案。 */
+  label: string
+  /** 注入拆解提示词的口径指令（含验收起草方向）。 */
+  directive: string
+}
+
+export const CAPABILITIES: readonly CapabilityPreset[] = [
+  {
+    id: 'bugfix',
+    label: '修 Bug',
+    directive: '本任务属于「修 Bug」：拆解按「复现 → 定位根因 → 修复 → 回归验证」推进；验收标准必须包含可复现的失败场景在修复后通过的验证。',
+  },
+  {
+    id: 'feature',
+    label: '新功能',
+    directive: '本任务属于「新功能」：拆解从用户可感知的行为出发（实现 → 接线 → 验证）；验收标准覆盖功能主路径与关键边界行为。',
+  },
+  {
+    id: 'research',
+    label: '技术调研',
+    directive: '本任务属于「技术调研」：交付物为调研报告与结论建议；拆解围绕对比/实验展开，验收标准围绕结论的可验证性（数据来源、实验命令、结论明确）。',
+  },
+  {
+    id: 'cleanup',
+    label: '清理整理',
+    directive: '本任务属于「清理整理」：只做清理/重构/整理，不引入新的功能行为；验收标准必须包含「行为不变」的回归验证。',
+  },
+]
+
+export function capabilityOf(id: string): CapabilityPreset | undefined {
+  return CAPABILITIES.find(c => c.id === id)
 }
 
 // —— 任务模板（FR-19，templates.json；跨 host/client 的共享形状） ——

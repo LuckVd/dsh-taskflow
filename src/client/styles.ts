@@ -356,6 +356,45 @@ export const TASKFLOW_CSS = `
 .tf-textarea { min-height: 84px; resize: vertical; }
 .tf-actions { display: flex; gap: 10px; flex-wrap: wrap; padding-top: 4px; align-items: center; }
 
+/* —— 新建任务弹窗（Bento 单列，FR-21/FR-22）—— */
+/* 居中弹窗：比验收台（tf-modal 1240px）小一档，专注表单录入。 */
+.tf-create-modal { width: min(640px, 100%); height: min(820px, 100%); }
+.tf-create-foot { display: flex; align-items: center; gap: 12px; justify-content: flex-end; }
+.tf-create-foot .tf-hint { flex: 1; min-width: 0; }
+.tf-create-foot .tf-actions { padding-top: 0; }
+/* Bento 单列：任务 / 执行 两张圆角白卡纵向堆叠。 */
+.tf-bento { display: flex; flex-direction: column; gap: 12px; }
+.tf-bento-cell { display: flex; flex-direction: column; gap: 12px; min-width: 0; background: ${V.bgBase}; border: 1px solid ${V.borderL1}; border-radius: 12px; padding: 14px; }
+.tf-bento-cell > .tf-section-title { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; color: ${V.label2}; }
+/* 胶囊滑选（执行模式）：滑块位移，选中态随行内切换，零布局位移。 */
+.tf-capsule { position: relative; display: grid; grid-template-columns: 1fr 1fr; background: ${V.bgLayer2}; border: 1px solid ${V.borderL2}; border-radius: 999px; padding: 3px; }
+.tf-capsule-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); background: ${V.bgBase}; border: 1px solid ${V.business}; border-radius: 999px; box-shadow: ${V.shadow1}; transition: transform 160ms ease; }
+.tf-capsule-thumb.tf-capsule-right { transform: translateX(100%); }
+.tf-capsule-opt { position: relative; z-index: 1; padding: 6px 0; font-size: 13px; font-weight: 500; color: ${V.label2}; border-radius: 999px; }
+.tf-capsule-opt[aria-checked='true'] { color: ${V.business}; font-weight: 600; }
+/* 能力/档位 pills：单行包裹的小胶囊，选中主题色。 */
+.tf-pill-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.tf-pill { min-height: 28px; padding: 2px 14px; font-size: 12.5px; font-weight: 500; color: ${V.label2}; background: ${V.bgLayer2}; border: 1px solid ${V.borderL2}; border-radius: 999px; transition: border-color 120ms ease, color 120ms ease, background 120ms ease; }
+.tf-pill:hover { border-color: ${V.business}; color: ${V.label}; }
+.tf-pill.active { color: ${V.onPrimary}; background: ${V.business}; border-color: ${V.business}; }
+/* 工作目录选择器：只读展示 + 下拉浏览（/api/taskflow/dirs）。 */
+.tf-ws-row { display: flex; gap: 8px; align-items: center; }
+.tf-ws-toggle { flex: 1; min-width: 0; justify-content: flex-start; text-align: left; border: 1px solid ${V.borderL3}; border-radius: 8px; padding: 7px 10px; background: ${V.bgBase}; }
+.tf-ws-toggle .tf-ws-toggle-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ${V.codeFont}; font-size: 12px; color: ${V.label2}; }
+.tf-ws-toggle.tf-ws-set .tf-ws-toggle-text { color: ${V.label}; }
+.tf-ws-picker { display: flex; flex-direction: column; gap: 8px; border: 1px solid ${V.borderL2}; border-radius: 10px; padding: 10px; background: ${V.bgLayer2}; }
+.tf-ws-crumb { font-family: ${V.codeFont}; font-size: 12px; color: ${V.label}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-ws-picker-actions { display: flex; gap: 8px; }
+.tf-ws-picker-actions .tf-btn-primary { margin-left: auto; }
+.tf-ws-list { display: flex; flex-direction: column; max-height: 180px; overflow-y: auto; scrollbar-width: thin; }
+.tf-ws-item { text-align: left; padding: 6px 8px; border-radius: 6px; font-size: 13px; color: ${V.label}; }
+.tf-ws-item:hover { background: ${V.bgHover}; }
+.tf-ws-path { font-family: ${V.codeFont}; font-size: 12px; background: ${V.bgLayer2}; border-radius: 6px; padding: 1px 6px; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .tf-create-modal { animation: none; }
+  .tf-capsule-thumb { transition: none; }
+}
+
 /* —— 时间线 —— */
 .tf-timeline { display: flex; flex-direction: column; }
 .tf-tl-entry { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid ${V.borderL1}; font-size: 13px; }

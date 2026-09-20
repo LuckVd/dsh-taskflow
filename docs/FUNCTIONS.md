@@ -411,6 +411,22 @@ type SubtaskStatus =
 - 工具栏柱状图标 → 只读统计浮层（Esc/点外关闭）。指标：近 7/30 天吞吐（按任务级 done 事件分桶，归档的 done 仍计入——曾经完成过）、累计完成、进行中、一次通过率（done 且 round=1 占比）、平均迭代轮次（done 任务 round 均值）、拆解采纳率（拆解后未发生 editSubtasks 的任务占比）、被打回过的任务数。
 - 口径诚实：空账本比率显示「—」（不编造 0%）；每个指标的口径说明与数字同屏（浮层脚注），直接对齐 §9 成功指标（一次通过率 / 收敛轮次 / 拆解采纳率）。
 
+### 4.14 工作区域钉定（FR-21，2026-09-20）
+
+- 创建时可指定「工作目录」（`pins.workspace`，绝对路径，留空 = 宿主默认工作区）；模板（FR-19）可保存/预填该字段。
+- 硬约束：adapter 把 workspace 写入会话 `meta.cwd`（`src/host/dsh/adapter.ts`，fail-closed：目录不存在即报错）；DSH 文件沙箱的 workspace-write 可写根随会话 cwd 钉定——AI 的一切文件改动被限定在该目录内。
+- 软约束：拆解 / 执行 / 任务级终检提示词注入「工作区域条款」（`workspaceClause`，`src/host/prompts.ts`）——非必要不得改动区域外文件，确需区域外操作须先向用户说明理由。
+- 展示：任务详情合同卡显示工作目录（带「改动钉定区域」标注）；打回迭代 / 终检 / triage 会话统一走 `createAgent`，自动继承。
+- 目录选择器：`GET /api/taskflow/dirs?path=`（只读列出子目录，跳过隐藏目录，上限 200，非法/不可读 400）；创建表单为「选择而非填写」——只读展示 + 下拉浏览（上级/下钻/选这个目录），不留自由文本入口。
+- 新建界面（2026-09-20 二次改版）：侧栏抽屉 → 居中大弹窗 + **Bento 单列**（任务 / 执行两格）；提交门禁禁用时显示原因。
+
+### 4.15 能力预设（FR-22，2026-09-20）
+
+- 创建表单不提供「模板」的文字编辑能力，改为预制 4 个**能力**chip：修 Bug（bugfix）/ 新功能（feature）/ 技术调研（research）/ 清理整理（cleanup），单选可取消。
+- 选定后**只进后台**：`createTask.capability` 落库为 `Task.capability`（可选字段，存量任务兼容），拆解提示词注入对应口径（`capabilityDirective`，`src/host/prompts.ts`）——怎么拆、验收标准往哪个方向起草；正文/验收编辑框不出现任何预设文字。
+- 校验：`capability` 必须在 `CAPABILITIES` 白名单内（`src/protocol/actions.ts`），否则 ActionFormatError。
+- FR-19 模板库后端（templates.json / 路由）保留但创建表单不再使用。
+
 ---
 
 ## 5. UI/UX 规格

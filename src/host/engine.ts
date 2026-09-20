@@ -522,6 +522,7 @@ export class TaskflowEngine {
         updatedAt: Date.now(),
         createdBy: 'human',
         autoStart: action.autoStart ?? true,
+        ...(action.capability !== undefined ? { capability: action.capability } : {}),
         permissionConfirmed: !this.needsPermissionConfirm(pins),
         decomposeSessionIds: [],
       }
