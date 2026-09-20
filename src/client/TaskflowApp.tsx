@@ -610,7 +610,8 @@ function CreateModal({
   const [presets, setPresets] = useState<AgentPresetOption[]>([])
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null)
   const [presetId, setPresetId] = useState<string | null>(null)
-  const [maxConcurrentSubtasks, setMaxConcurrentSubtasks] = useState<number | null>(null)
+  /** 并发数输入：null = 未手动改（展示全局默认值）；提交前校验 1–8 整数。 */
+  const [concurrencyInput, setConcurrencyInput] = useState<string | null>(null)
   const [autoStart, setAutoStart] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -655,9 +656,16 @@ function CreateModal({
     void browseDirs(start)
   }
 
+  // FR-23：并发数有效值（未手动改 = 全局默认；全局也读不到 = 1）
+  const concurrency = (() => {
+    const raw = concurrencyInput ?? String(globalSettings?.maxConcurrentSubtasks ?? 1)
+    const value = Number.parseInt(raw, 10)
+    return Number.isInteger(value) && value >= 1 && value <= 8 ? value : null
+  })()
   // 提交门禁：禁用时给原因，不再只是静默灰按钮。
   const submitBlocked = title.trim().length === 0 ? '标题必填'
     : description.trim().length === 0 ? '描述必填'
+    : concurrency === null ? '并发数须为 1–8 的整数'
     : null
   const dialogRef = useRef<HTMLElement>(null)
   useDialogA11y(dialogRef, onClose)
@@ -684,7 +692,7 @@ function CreateModal({
         ...(presetId !== null ? { presetId } : {}),
       },
       ...(capability !== null ? { capability } : {}),
-      ...(maxConcurrentSubtasks !== null ? { maxConcurrentSubtasks } : {}),
+      maxConcurrentSubtasks: concurrency,
       autoStart,
     })
     setBusy(false)
@@ -799,62 +807,34 @@ function CreateModal({
                 )}
               </div>
               <div className="tf-field">
-                <label>子 agent（可选）</label>
-                <div className="tf-pill-row" role="radiogroup" aria-label="子 agent 预设">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={presetId === null}
-                    className={`tf-pill${presetId === null ? ' active' : ''}`}
-                    onClick={() => setPresetId(null)}
-                  >
-                    全局默认
-                  </button>
+                <label htmlFor="tf-preset">子 agent（默认跟随全局）</label>
+                <select
+                  id="tf-preset"
+                  className="tf-select"
+                  value={presetId ?? ''}
+                  aria-label="子 agent 预设"
+                  onChange={e => setPresetId(e.target.value === '' ? null : e.target.value)}
+                >
+                  <option value="">
+                    跟随全局默认{globalSettings?.defaultPresetId != null ? `（${presets.find(p => p.id === globalSettings.defaultPresetId)?.name ?? globalSettings.defaultPresetId}）` : '（宿主默认预设）'}
+                  </option>
                   {presets.map(preset => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={presetId === preset.id}
-                      className={`tf-pill${presetId === preset.id ? ' active' : ''}`}
-                      onClick={() => setPresetId(preset.id)}
-                    >
-                      {preset.name}
-                    </button>
+                    <option key={preset.id} value={preset.id}>{preset.name}</option>
                   ))}
-                </div>
-                {presetId === null && globalSettings?.defaultPresetId != null && (
-                  <span className="tf-hint">
-                    当前全局默认：{presets.find(p => p.id === globalSettings.defaultPresetId)?.name ?? globalSettings.defaultPresetId}
-                  </span>
-                )}
+                </select>
               </div>
               <div className="tf-field">
-                <label>并发数（可选）</label>
-                <div className="tf-pill-row" role="radiogroup" aria-label="任务并发数">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={maxConcurrentSubtasks === null}
-                    className={`tf-pill${maxConcurrentSubtasks === null ? ' active' : ''}`}
-                    onClick={() => setMaxConcurrentSubtasks(null)}
-                  >
-                    全局默认{globalSettings?.maxConcurrentSubtasks !== undefined ? `（${globalSettings.maxConcurrentSubtasks}）` : ''}
-                  </button>
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map(value => (
-                    <button
-                      key={value}
-                      type="button"
-                      role="radio"
-                      aria-checked={maxConcurrentSubtasks === value}
-                      className={`tf-pill${maxConcurrentSubtasks === value ? ' active' : ''}`}
-                      onClick={() => setMaxConcurrentSubtasks(value)}
-                    >
-                      {value}
-                    </button>
-                  ))}
-                </div>
-                <span className="tf-hint">该任务的子任务同时执行的会话数；实际取「全局上限与该值中较小者」。</span>
+                <label htmlFor="tf-concurrency">并发数（默认跟随全局）</label>
+                <input
+                  id="tf-concurrency"
+                  className="tf-input"
+                  inputMode="numeric"
+                  value={concurrencyInput ?? String(globalSettings?.maxConcurrentSubtasks ?? 1)}
+                  aria-label="任务并发数"
+                  aria-invalid={concurrency === null}
+                  onChange={e => setConcurrencyInput(e.target.value.replace(/[^\d]/g, ''))}
+                />
+                <span className="tf-hint">该任务同时执行的子任务会话数（1–8）；实际取全局上限与该值中较小者。</span>
               </div>
               <div className="tf-field">
                 <label>迭代上限</label>
