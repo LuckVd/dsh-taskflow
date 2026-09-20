@@ -211,14 +211,13 @@ export class DshSessionAdapter implements SessionAdapter {
     }
     const presetId = input.presetId
     if (presetId !== null && presetId !== undefined && presetId.trim().length > 0) {
+      // 宿主 agentPresets.list() 为 async（Promise<AgentPreset[]>）；fail-closed 校验预设存在
       const presets = (this.options.ctx as unknown as Record<string, unknown>)['agentPresets'] as
-        | { list?(): Array<{ id?: string; name?: string }> | Map<string, unknown> }
+        | { list?(): Promise<Array<{ id?: string; name?: string }>> }
         | undefined
       if (presets?.list !== undefined) {
-        const listed = presets.list()
-        const ids = Array.isArray(listed)
-          ? listed.map(p => p.id ?? p.name ?? '')
-          : [...listed.keys()].map(String)
+        const listed = await presets.list()
+        const ids = listed.map(p => p.id ?? p.name ?? '')
         if (!ids.includes(presetId)) {
           throw new Error(`Agent 预设不存在：${presetId}（fail-closed，§7.2；可用：${ids.join(', ') || '无'}）`)
         }

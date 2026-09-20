@@ -262,21 +262,19 @@ function readDefaultModelSelection(ctx: Context): { provider: string; model: str
  * 子 agent 预设目录（FR-23）：自 agentPresets 服务投影（list 形态兼容数组/Map）。
  * 目录是「锦上添花」的数据源：服务缺失/取用抛错 → 空目录（客户端只剩「跟随全局默认」项）。
  */
-function buildPresetListFrom(ctx: Context): () => Array<{ id: string; name: string }> {
-  return (): Array<{ id: string; name: string }> => {
+function buildPresetListFrom(ctx: Context): () => Promise<Array<{ id: string; name: string }>> {
+  return async (): Promise<Array<{ id: string; name: string }>> => {
     const agentPresets = (ctx as unknown as Record<string, unknown>)['agentPresets'] as
-      | { list?(): Array<{ id?: string; name?: string }> | Map<string, unknown> }
+      | { list?(): Promise<Array<{ id?: string; name?: string; broken?: string }>> }
       | undefined
     if (agentPresets?.list === undefined) return []
     try {
-      const listed = agentPresets.list()
-      const entries = Array.isArray(listed)
-        ? listed.map(p => ({ id: p.id ?? p.name ?? '', name: p.name ?? p.id ?? '' }))
-        : [...listed.entries()].map(([id, value]) => {
-            const name = (value as { name?: string } | undefined)?.name
-            return { id: String(id), name: name ?? String(id) }
-          })
-      return entries.filter(e => e.id.length > 0)
+      const listed = await agentPresets.list()
+      // broken = 无法组合会话的坏预设：roster 上会留名但不进可选下拉
+      return listed
+        .filter(p => p.broken === undefined)
+        .map(p => ({ id: p.id ?? p.name ?? '', name: p.name ?? p.id ?? '' }))
+        .filter(p => p.id.length > 0)
     } catch {
       return []
     }

@@ -823,18 +823,18 @@ function CreateModal({
                   ))}
                 </select>
               </div>
-              <div className="tf-field">
-                <label htmlFor="tf-concurrency">并发数（默认跟随全局）</label>
+              <div className="tf-inline-field">
+                <label htmlFor="tf-concurrency">并发数</label>
                 <input
                   id="tf-concurrency"
-                  className="tf-input"
+                  className="tf-input tf-input-narrow"
                   inputMode="numeric"
                   value={concurrencyInput ?? String(globalSettings?.maxConcurrentSubtasks ?? 1)}
                   aria-label="任务并发数"
                   aria-invalid={concurrency === null}
                   onChange={e => setConcurrencyInput(e.target.value.replace(/[^\d]/g, ''))}
                 />
-                <span className="tf-hint">该任务同时执行的子任务会话数（1–8）；实际取全局上限与该值中较小者。</span>
+                <span className="tf-hint">1–8；实际取全局上限与该值中较小者</span>
               </div>
               <div className="tf-field">
                 <label>迭代上限</label>

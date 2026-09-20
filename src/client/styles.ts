@@ -377,6 +377,10 @@ export const TASKFLOW_CSS = `
 .tf-pill { min-height: 28px; padding: 2px 14px; font-size: 12.5px; font-weight: 500; color: ${V.label2}; background: ${V.bgLayer2}; border: 1px solid ${V.borderL2}; border-radius: 999px; transition: border-color 120ms ease, color 120ms ease, background 120ms ease; }
 .tf-pill:hover { border-color: ${V.business}; color: ${V.label}; }
 .tf-pill.active { color: ${V.onPrimary}; background: ${V.business}; border-color: ${V.business}; }
+/* 单行紧凑字段：label 与输入同行（并发数等小控件），不占整行。 */
+.tf-inline-field { display: flex; align-items: center; gap: 8px; }
+.tf-inline-field label { font-size: 12px; font-weight: 600; color: ${V.label2}; flex: none; }
+.tf-input-narrow { width: 72px; text-align: center; }
 /* 工作目录选择器：只读展示 + 下拉浏览（/api/taskflow/dirs）。 */
 .tf-ws-row { display: flex; gap: 8px; align-items: center; }
 .tf-ws-toggle { flex: 1; min-width: 0; justify-content: flex-start; text-align: left; border: 1px solid ${V.borderL3}; border-radius: 8px; padding: 7px 10px; background: ${V.bgBase}; }

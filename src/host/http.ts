@@ -83,7 +83,7 @@ export async function handleTaskflowRequest(
   body: string | undefined,
   opts: {
     models?: () => Promise<ModelCatalog>
-    presets?: () => Array<{ id: string; name: string }>
+    presets?: () => Promise<Array<{ id: string; name: string }>> | Array<{ id: string; name: string }>
     persistSettings?: (settings: GlobalSettings) => Promise<unknown>
     templates?: { get: () => TaskTemplate[]; update: (raw: unknown) => Promise<TaskTemplate[]> }
     /** webhook 建卡令牌（FR-17）；提供时 POST /hook 校验 ?token= 或 x-taskflow-token。 */
@@ -206,8 +206,8 @@ export async function handleTaskflowRequest(
     return listDirectories(opts.query?.get('path') ?? '/')
   }
   if (method === 'GET' && pathname === '/api/taskflow/presets') {
-    const presets = opts.presets?.() ?? []
-    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify({ presets }) }
+    const presets = await opts.presets?.()
+    return { status: 200, headers: JSON_HEADERS, body: JSON.stringify({ presets: presets ?? [] }) }
   }
   if (method === 'GET' && pathname === '/api/taskflow/artifact/preview') {
     const taskId = opts.query?.get('taskId') ?? ''
