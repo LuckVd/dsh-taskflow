@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { AgentPresetOption, GlobalSettings, ModelCatalog, SessionModelSelection } from '../protocol/types.ts'
+import type { GlobalSettings, ModelCatalog, SessionModelSelection } from '../protocol/types.ts'
 import type { TaskflowTransport } from './api.ts'
 
 type Slot = 'decompose' | 'execution'
@@ -47,7 +47,6 @@ export function ModelSettingsPopover({
   onClose: () => void
 }): JSX.Element {
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
-  const [presets, setPresets] = useState<AgentPresetOption[]>([])
   const [settings, setSettings] = useState<GlobalSettings | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -62,13 +61,6 @@ export function ModelSettingsPopover({
         if (cancelled) return
         setCatalog(models)
         setSettings(current)
-        // 预设目录独立降级：挂掉不让模型/并发设置不可用
-        try {
-          const list = await transport.getPresets()
-          if (!cancelled) setPresets(list)
-        } catch {
-          if (!cancelled) setPresets([])
-        }
       } catch (error) {
         if (cancelled) return
         // 目录与设置分开降级：目录挂掉不该让「跟随宿主默认」这一选择也不可用
@@ -152,12 +144,6 @@ export function ModelSettingsPopover({
     await save(settings, { ...settings, maxConcurrentSubtasks: value })
   }
 
-  /** 全局默认子 agent 预设（FR-23）：任务级未指定 pins.presetId 时的回退值。 */
-  const changeDefaultPreset = async (value: string): Promise<void> => {
-    if (settings === null) return
-    await save(settings, { ...settings, defaultPresetId: value === '' ? null : value })
-  }
-
   const defaultLabel =
     catalog?.default === null || catalog?.default === undefined
       ? null
@@ -219,24 +205,6 @@ export function ModelSettingsPopover({
             </div>
           )
           })}
-          <div className="tf-slot">
-            <span className="tf-slot-label">
-              🤖 子 agent
-              <span className="tf-slot-desc">全局默认预设（任务可覆盖）</span>
-            </span>
-            <select
-              className="tf-select"
-              value={settings.defaultPresetId ?? ''}
-              aria-label="全局默认子 agent 预设"
-              onChange={event => void changeDefaultPreset(event.target.value)}
-            >
-              <option value="">宿主默认预设</option>
-              {presets.map(preset => (
-                <option key={preset.id} value={preset.id}>{preset.name}</option>
-              ))}
-            </select>
-            <span className="tf-hint">创建任务时默认使用；单任务可在创建时改选其他预设。</span>
-          </div>
           <div className="tf-slot">
             <span className="tf-slot-label">
               ⚙️ 调度

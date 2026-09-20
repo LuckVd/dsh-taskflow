@@ -39,6 +39,8 @@ export interface CreateTaskAction {
   capability?: string
   /** 任务级子任务并发上限（FR-23，可选，1–8）：缺省跟随全局设置。 */
   maxConcurrentSubtasks?: number
+  /** 任务级模型覆盖（FR-24，可选）：{ provider, model, reasoningEffort? }；缺省跟随全局设置。 */
+  model?: import('./types.ts').SessionModelSelection
   autoStart?: boolean
   /** 创建后立即触发拆解（默认 true，对应 T2 的自动形态）。 */
   autoDecompose?: boolean
@@ -218,6 +220,17 @@ export function validateActionShape(action: unknown): TaskflowAction {
         const value = action.maxConcurrentSubtasks
         if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 8) {
           throw new ActionFormatError('maxConcurrentSubtasks must be an integer between 1 and 8.')
+        }
+      }
+      if (action.model !== undefined) {
+        const m = action.model as Record<string, unknown>
+        if (typeof m !== 'object' || m === null || Array.isArray(m) ||
+            typeof m.provider !== 'string' || m.provider.length === 0 ||
+            typeof m.model !== 'string' || m.model.length === 0) {
+          throw new ActionFormatError('model must be { provider, model, reasoningEffort? }.')
+        }
+        if (m.reasoningEffort !== undefined && typeof m.reasoningEffort !== 'string') {
+          throw new ActionFormatError('model.reasoningEffort must be a string.')
         }
       }
       validateAutoStartFlag(action.autoStart)

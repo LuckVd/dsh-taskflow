@@ -524,6 +524,7 @@ export class TaskflowEngine {
         autoStart: action.autoStart ?? true,
         ...(action.capability !== undefined ? { capability: action.capability } : {}),
         ...(action.maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks: action.maxConcurrentSubtasks } : {}),
+        ...(action.model !== undefined ? { model: action.model } : {}),
         permissionConfirmed: !this.needsPermissionConfirm(pins),
         decomposeSessionIds: [],
       }
@@ -554,7 +555,7 @@ export class TaskflowEngine {
       const task = findTask(ledger, taskId)
       if (task === null) throw new GuardError(`task ${taskId} not found`)
       const sessionId = `tfs_${taskId}_d${attempt}_${randomId(4)}`
-      const model = this.globalSettings.decompose
+      const model = task.model ?? this.globalSettings.decompose
       const modelRefs = { sessionId, ...(modelLabel(model) !== undefined ? { model: modelLabel(model) } : {}) }
       if (task.status === 'decomposing') {
         // 重试路径：已在拆解中，不重复 T2，仅追加会话与留痕
@@ -973,7 +974,7 @@ export class TaskflowEngine {
       if (task.evidence !== undefined || task.finalizeSessionId !== undefined) return null
       const sessionId = `tfs_${taskId}_f${attempt}_${randomId(4)}`
       task.finalizeSessionId = sessionId
-      const model = this.globalSettings.decompose
+      const model = task.model ?? this.globalSettings.decompose
       const modelRefs = { sessionId, ...(modelLabel(model) !== undefined ? { model: modelLabel(model) } : {}) }
       appendTaskNote(task, {
         actor: 'system',
@@ -1428,7 +1429,8 @@ export class TaskflowEngine {
         sub.sessionIds.push(sessionId)
         sub.attempt += 1
         sub.progressNotes = []
-        const modelRefs = { sessionId, ...(modelLabel(this.globalSettings.execution) !== undefined ? { model: modelLabel(this.globalSettings.execution) } : {}) }
+        const executionModel = task.model ?? this.globalSettings.execution
+      const modelRefs = { sessionId, ...(modelLabel(executionModel) !== undefined ? { model: modelLabel(executionModel) } : {}) }
         if (sub.status === 'pending') {
           transitionSubtask(sub, 'in-progress', { actor: 'system', reason: '调度器启动执行会话（S2）', refs: modelRefs })
         } else {
@@ -1497,7 +1499,7 @@ export class TaskflowEngine {
       workspace: task.contract.pins.workspace,
       presetId: task.contract.pins.presetId,
       permission: task.contract.pins.permission,
-      model: this.globalSettings.execution,
+      model: task.model ?? this.globalSettings.execution,
       executionMode: resolveExecutionMode(task.contract.pins, this.config.sessionDefaultPermission),
       tools: {
         submitEvidence: async payload => this.toolSubmitEvidence(sessionId, payload),

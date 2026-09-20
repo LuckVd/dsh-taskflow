@@ -41,6 +41,11 @@ export interface Task {
   capability?: string
   /** 任务级子任务并发上限（FR-23，可选）：缺省跟随全局设置；设置后取 min(全局, 任务级)。 */
   maxConcurrentSubtasks?: number
+  /**
+   * 任务级模型覆盖（FR-24，可选）：指定后该任务的拆解 / 执行 / 终检会话都用它，
+   * 不再分别跟随全局两槽；缺省 = 跟随全局设置。
+   */
+  model?: SessionModelSelection
   /** 拆解后自动开工（默认 true）。 */
   autoStart: boolean
   /** 权限确认门：pins.permission 高于会话默认时须人事先确认（§7.1）。 */

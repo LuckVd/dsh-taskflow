@@ -38,7 +38,7 @@ import {
 } from './notifications.ts'
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
-import type { AgentPresetOption, Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSettings } from '../protocol/types.ts'
+import type { Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import { CAPABILITIES } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
@@ -572,6 +572,12 @@ function EmptyBoard({ onCreate }: { onCreate: () => void }): JSX.Element {
 // 工作目录（FR-21）：目录选择器（/api/taskflow/dirs 浏览），不要求手填。
 
 const CAPABILITY_CHOICES = CAPABILITIES
+
+/** 任务级模型选择的编码/解码（与全局设置浮层同款 provider::model 形态）。 */
+function decodeModelChoice(choice: string): { provider: string; model: string } {
+  const separator = choice.indexOf('::')
+  return { provider: choice.slice(0, separator), model: choice.slice(separator + 2) }
+}
 const ROUND_CHOICES: Array<{ value: number | null; label: string }> = [
   { value: 30, label: '30' },
   { value: 60, label: '60' },
@@ -606,10 +612,11 @@ function CreateModal({
   const [wsError, setWsError] = useState<string | null>(null)
   /** 迭代上限（FR-22 改版）：预设档位单选，null = 无限。 */
   const [maxRounds, setMaxRounds] = useState<number | null>(null)
-  /** FR-23：全局设置镜像（展示默认值）+ 任务级覆盖（null = 跟随全局）。 */
-  const [presets, setPresets] = useState<AgentPresetOption[]>([])
+  /** FR-24：模型目录（任务级覆盖下拉数据源）+ 全局设置镜像（展示默认值）。 */
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null)
-  const [presetId, setPresetId] = useState<string | null>(null)
+  /** null = 跟随全局设置；否则 'provider::model'（与全局设置浮层同款编码）。 */
+  const [modelChoice, setModelChoice] = useState('')
   /** 并发数输入：null = 未手动改（展示全局默认值）；提交前校验 1–8 整数。 */
   const [concurrencyInput, setConcurrencyInput] = useState<string | null>(null)
   const [autoStart, setAutoStart] = useState(true)
@@ -625,9 +632,9 @@ function CreateModal({
         if (!cancelled) setGlobalSettings(current)
       } catch { /* 全局设置读不到：字段只显示「跟随全局」 */ }
       try {
-        const list = await transport.getPresets()
-        if (!cancelled) setPresets(list)
-      } catch { /* 预设目录读不到：只剩「跟随全局默认」项 */ }
+        const models = await transport.getModels()
+        if (!cancelled) setCatalog(models)
+      } catch { /* 模型目录读不到：只剩「跟随全局设置」项 */ }
     })()
     return () => { cancelled = true }
   }, [transport])
@@ -689,9 +696,9 @@ function CreateModal({
         permission: mode === 'auto' ? 'workspace-write' : 'read-only',
         executionMode: mode,
         ...(workspace.trim().length > 0 ? { workspace: workspace.trim() } : {}),
-        ...(presetId !== null ? { presetId } : {}),
       },
       ...(capability !== null ? { capability } : {}),
+      ...(modelChoice !== '' ? { model: decodeModelChoice(modelChoice) } : {}),
       maxConcurrentSubtasks: concurrency,
       autoStart,
     })
@@ -807,21 +814,24 @@ function CreateModal({
                 )}
               </div>
               <div className="tf-field">
-                <label htmlFor="tf-preset">子 agent（默认跟随全局）</label>
+                <label htmlFor="tf-model">模型（默认跟随全局）</label>
                 <select
-                  id="tf-preset"
+                  id="tf-model"
                   className="tf-select"
-                  value={presetId ?? ''}
-                  aria-label="子 agent 预设"
-                  onChange={e => setPresetId(e.target.value === '' ? null : e.target.value)}
+                  value={modelChoice}
+                  aria-label="任务模型"
+                  onChange={e => setModelChoice(e.target.value)}
                 >
-                  <option value="">
-                    跟随全局默认{globalSettings?.defaultPresetId != null ? `（${presets.find(p => p.id === globalSettings.defaultPresetId)?.name ?? globalSettings.defaultPresetId}）` : '（宿主默认预设）'}
-                  </option>
-                  {presets.map(preset => (
-                    <option key={preset.id} value={preset.id}>{preset.name}</option>
+                  <option value="">跟随全局设置</option>
+                  {catalog?.groups.map(group => (
+                    <optgroup key={group.id} label={group.name}>
+                      {group.models.map(model => (
+                        <option key={`${group.id}::${model.id}`} value={`${group.id}::${model.id}`}>{model.name}</option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
+                <span className="tf-hint">选定后该任务的拆解 / 执行 / 终检都用此模型，不随全局两槽。</span>
               </div>
               <div className="tf-inline-field">
                 <label htmlFor="tf-concurrency">并发数</label>
