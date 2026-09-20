@@ -154,6 +154,8 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       table.register({ kind: 'exact', path: '/api/taskflow/hook', handler: apiHandler }),
       // 漏注册 = dsh 路由器直接 404，永远到不了 apiHandler（真机 2026-09-11 事故：交付物预览全挂）
       table.register({ kind: 'exact', path: '/api/taskflow/artifact/preview', handler: apiHandler }),
+      // 工作目录浏览（FR-21）：只读列出子目录，供创建表单目录选择器
+      table.register({ kind: 'exact', path: '/api/taskflow/dirs', handler: apiHandler }),
     ]
     return () => {
       for (const dispose of disposeRoutes) dispose()
