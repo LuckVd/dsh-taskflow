@@ -44,6 +44,7 @@ describe('插件路由注册契约', () => {
         '/api/taskflow/models',
         '/api/taskflow/artifact/preview',
         '/api/taskflow/dirs',
+        '/api/taskflow/presets',
       ]) {
         expect(paths, `route ${path} must be registered in the dsh plugin`).toContain(path)
       }

@@ -156,6 +156,8 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       table.register({ kind: 'exact', path: '/api/taskflow/artifact/preview', handler: apiHandler }),
       // 工作目录浏览（FR-21）：只读列出子目录，供创建表单目录选择器
       table.register({ kind: 'exact', path: '/api/taskflow/dirs', handler: apiHandler }),
+      // 子 agent 预设目录（FR-23）：创建表单与全局设置的预设下拉数据源
+      table.register({ kind: 'exact', path: '/api/taskflow/presets', handler: apiHandler }),
     ]
     return () => {
       for (const dispose of disposeRoutes) dispose()
@@ -173,6 +175,7 @@ export function apply(ctx: Context, config: TaskflowPluginConfig = {}): void {
       const body = await readBody(req)
       const result = await handleTaskflowRequest(engine, req.method ?? 'GET', url.pathname, body, {
         models: buildModelCatalogFrom(ctx),
+        presets: buildPresetListFrom(ctx),
         // PUT settings 的落盘口（fail-closed：落盘失败不改引擎内存）
         persistSettings: next => settings.update(next),
         // 模板库读写口（FR-19；PUT 全表先校验后落盘）
@@ -255,6 +258,31 @@ function readDefaultModelSelection(ctx: Context): { provider: string; model: str
  * llm 服务缺失/取用抛错 → 空目录（客户端只剩「跟随宿主默认」项，仍可保存）；
  * 单 provider 失败 → 跳过该 provider。整体仍抛错时由 HTTP 层转 502（带原因）。
  */
+/**
+ * 子 agent 预设目录（FR-23）：自 agentPresets 服务投影（list 形态兼容数组/Map）。
+ * 目录是「锦上添花」的数据源：服务缺失/取用抛错 → 空目录（客户端只剩「跟随全局默认」项）。
+ */
+function buildPresetListFrom(ctx: Context): () => Array<{ id: string; name: string }> {
+  return (): Array<{ id: string; name: string }> => {
+    const agentPresets = (ctx as unknown as Record<string, unknown>)['agentPresets'] as
+      | { list?(): Array<{ id?: string; name?: string }> | Map<string, unknown> }
+      | undefined
+    if (agentPresets?.list === undefined) return []
+    try {
+      const listed = agentPresets.list()
+      const entries = Array.isArray(listed)
+        ? listed.map(p => ({ id: p.id ?? p.name ?? '', name: p.name ?? p.id ?? '' }))
+        : [...listed.entries()].map(([id, value]) => {
+            const name = (value as { name?: string } | undefined)?.name
+            return { id: String(id), name: name ?? String(id) }
+          })
+      return entries.filter(e => e.id.length > 0)
+    } catch {
+      return []
+    }
+  }
+}
+
 function buildModelCatalogFrom(ctx: Context): () => Promise<ModelCatalog> {
   return async (): Promise<ModelCatalog> => {
     const fallback = (): ModelCatalog => ({ default: readDefaultModelSelection(ctx) ?? null, groups: [] })

@@ -107,3 +107,10 @@ describe('GlobalSettingsStore（原子落盘 + 损坏回退）', () => {
     }
   })
 })
+describe('FR-23 全局默认子 agent 预设（defaultPresetId）', () => {
+  it('接受字符串 / null；拒绝其他类型与未知字段并存', () => {
+    expect(validateGlobalSettings({ decompose: null, execution: null, defaultPresetId: 'coder' })).toMatchObject({ defaultPresetId: 'coder' })
+    expect(validateGlobalSettings({ decompose: null, execution: null, defaultPresetId: null })).toMatchObject({ defaultPresetId: null })
+    expect(() => validateGlobalSettings({ decompose: null, execution: null, defaultPresetId: 3 })).toThrow(/defaultPresetId/)
+  })
+})

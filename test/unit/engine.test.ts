@@ -1323,6 +1323,50 @@ describe('交付物一等公民（§4.5b：artifacts 声明 + 只读预览）', 
 // —— FR-12/FR-13（2026-09-15）：依赖 DAG 就绪守卫 + WIP 并发上限 + 依赖回退 ——
 
 describe('依赖 DAG 与 WIP 调度（FR-12/FR-13）', () => {
+  it('FR-23：任务级并发上限压过全局（全局 8、任务 1 → 该任务内串行），且值落库', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'), { maxConcurrentSubtasks: 8 })
+      // 两个互不依赖的子任务：全局 8 下本可并行，任务级 1 应强制串行
+      adapter.decomposeBehavior = () => ({
+        kind: 'ok' as const,
+        output: {
+          taskAcceptance: [{ text: '验收' }],
+          subtasks: [
+            { title: 'A1 独立', detail: '', acceptance: [{ text: 'A1 完成' }], deps: [] },
+            { title: 'A2 独立', detail: '', acceptance: [{ text: 'A2 完成' }], deps: [] },
+          ],
+        },
+      })
+      let live = 0
+      let peak = 0
+      adapter.executionBehavior = async input => {
+        live += 1
+        peak = Math.max(peak, live)
+        try {
+          const result = await input.tools.submitEvidence(buildPassingEvidence(engine.getState().ledger, input.subtaskId))
+          if (!result.accepted) throw new Error(result.correction)
+        } finally {
+          live -= 1
+        }
+      }
+      const created = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'req-fr23',
+        title: '任务级并发',
+        description: '全局 8、任务 1',
+        maxConcurrentSubtasks: 1,
+      } as never)
+      expect(created.ok).toBe(true)
+      const taskOf = () => ledgerOf(engine).tasks.find(t => t.id === created.taskId)!
+      expect(taskOf().maxConcurrentSubtasks).toBe(1)
+      await waitFor(() => taskOf().subtasks.every(s => s.status === 'review' || s.status === 'done'))
+      expect(peak).toBe(1)
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
   /** 三子任务链式依赖的拆解行为：S2 依赖 S1，S3 依赖 S2。 */
   function chainedDecompose(input: { taskId: string }): DecomposeResult | Promise<DecomposeResult> {
     void input

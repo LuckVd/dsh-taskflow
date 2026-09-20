@@ -39,6 +39,8 @@ export interface Task {
   createdBy: 'human'
   /** 能力预设（FR-22，可选）：创建时选定，Host 据此调整拆解/验收口径，不进正文。 */
   capability?: string
+  /** 任务级子任务并发上限（FR-23，可选）：缺省跟随全局设置；设置后取 min(全局, 任务级)。 */
+  maxConcurrentSubtasks?: number
   /** 拆解后自动开工（默认 true）。 */
   autoStart: boolean
   /** 权限确认门：pins.permission 高于会话默认时须人事先确认（§7.1）。 */
@@ -265,6 +267,14 @@ export interface ModelSettings {
 export interface GlobalSettings extends ModelSettings {
   /** 同时运行的子任务执行会话数（WIP 上限，1–8 整数；1 = 串行）。 */
   maxConcurrentSubtasks?: number
+  /** 全局默认子 agent 预设（FR-23）；null/缺省 = 宿主默认预设。任务级 pins.presetId 未指定时回退到此。 */
+  defaultPresetId?: string | null
+}
+
+/** 子 agent 预设目录项（GET /api/taskflow/presets 载荷；host 自 agentPresets 服务投影）。 */
+export interface AgentPresetOption {
+  id: string
+  name: string
 }
 
 // —— 能力预设（FR-22，2026-09-20）——

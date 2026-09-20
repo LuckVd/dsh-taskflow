@@ -38,7 +38,7 @@ import {
 } from './notifications.ts'
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
-import type { Artifact, ArtifactPreview, DispatchResult, EngineState } from '../protocol/types.ts'
+import type { AgentPresetOption, Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSettings } from '../protocol/types.ts'
 import { CAPABILITIES } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
@@ -377,6 +377,7 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
         <CreateModal
           onClose={() => setCreateOpen(false)}
           dispatch={dispatch}
+          transport={transport}
         />
       )}
       {selected !== null && (
@@ -582,9 +583,11 @@ const ROUND_CHOICES: Array<{ value: number | null; label: string }> = [
 function CreateModal({
   onClose,
   dispatch,
+  transport,
 }: {
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
+  transport: TaskflowTransport
 }): JSX.Element {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -603,9 +606,30 @@ function CreateModal({
   const [wsError, setWsError] = useState<string | null>(null)
   /** 迭代上限（FR-22 改版）：预设档位单选，null = 无限。 */
   const [maxRounds, setMaxRounds] = useState<number | null>(null)
+  /** FR-23：全局设置镜像（展示默认值）+ 任务级覆盖（null = 跟随全局）。 */
+  const [presets, setPresets] = useState<AgentPresetOption[]>([])
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings | null>(null)
+  const [presetId, setPresetId] = useState<string | null>(null)
+  const [maxConcurrentSubtasks, setMaxConcurrentSubtasks] = useState<number | null>(null)
   const [autoStart, setAutoStart] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      // FR-23：全局设置（默认子 agent / 并发）+ 预设目录；任一失败静默降级（创建流程不因此卡住）
+      try {
+        const current = await transport.getSettings()
+        if (!cancelled) setGlobalSettings(current)
+      } catch { /* 全局设置读不到：字段只显示「跟随全局」 */ }
+      try {
+        const list = await transport.getPresets()
+        if (!cancelled) setPresets(list)
+      } catch { /* 预设目录读不到：只剩「跟随全局默认」项 */ }
+    })()
+    return () => { cancelled = true }
+  }, [transport])
 
   const browseDirs = async (target: string): Promise<void> => {
     setWsError(null)
@@ -657,8 +681,10 @@ function CreateModal({
         permission: mode === 'auto' ? 'workspace-write' : 'read-only',
         executionMode: mode,
         ...(workspace.trim().length > 0 ? { workspace: workspace.trim() } : {}),
+        ...(presetId !== null ? { presetId } : {}),
       },
       ...(capability !== null ? { capability } : {}),
+      ...(maxConcurrentSubtasks !== null ? { maxConcurrentSubtasks } : {}),
       autoStart,
     })
     setBusy(false)
@@ -771,6 +797,64 @@ function CreateModal({
                     </div>
                   </div>
                 )}
+              </div>
+              <div className="tf-field">
+                <label>子 agent（可选）</label>
+                <div className="tf-pill-row" role="radiogroup" aria-label="子 agent 预设">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={presetId === null}
+                    className={`tf-pill${presetId === null ? ' active' : ''}`}
+                    onClick={() => setPresetId(null)}
+                  >
+                    全局默认
+                  </button>
+                  {presets.map(preset => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={presetId === preset.id}
+                      className={`tf-pill${presetId === preset.id ? ' active' : ''}`}
+                      onClick={() => setPresetId(preset.id)}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+                {presetId === null && globalSettings?.defaultPresetId != null && (
+                  <span className="tf-hint">
+                    当前全局默认：{presets.find(p => p.id === globalSettings.defaultPresetId)?.name ?? globalSettings.defaultPresetId}
+                  </span>
+                )}
+              </div>
+              <div className="tf-field">
+                <label>并发数（可选）</label>
+                <div className="tf-pill-row" role="radiogroup" aria-label="任务并发数">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={maxConcurrentSubtasks === null}
+                    className={`tf-pill${maxConcurrentSubtasks === null ? ' active' : ''}`}
+                    onClick={() => setMaxConcurrentSubtasks(null)}
+                  >
+                    全局默认{globalSettings?.maxConcurrentSubtasks !== undefined ? `（${globalSettings.maxConcurrentSubtasks}）` : ''}
+                  </button>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map(value => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={maxConcurrentSubtasks === value}
+                      className={`tf-pill${maxConcurrentSubtasks === value ? ' active' : ''}`}
+                      onClick={() => setMaxConcurrentSubtasks(value)}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
+                <span className="tf-hint">该任务的子任务同时执行的会话数；实际取「全局上限与该值中较小者」。</span>
               </div>
               <div className="tf-field">
                 <label>迭代上限</label>

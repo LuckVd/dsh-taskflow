@@ -10,6 +10,19 @@ describe('action 白名单与形状校验（§6）', () => {
     const action = validateActionShape({ ...base, acceptance: [{ text: '验收 1' }], pins: { permission: 'workspace-write' }, maxRounds: 5 })
     expect(action).toMatchObject({ type: 'createTask', requestId: 'r1', maxRounds: 5 })
   })
+  it('FR-22：capability 白名单校验', () => {
+    expect(() => validateActionShape({ ...base, capability: 'bugfix' })).not.toThrow()
+    expect(() => validateActionShape({ ...base, capability: 'sudo' })).toThrow(/capability/)
+  })
+
+  it('FR-23：maxConcurrentSubtasks 必须 1–8 整数；合法值透传', () => {
+    expect(() => validateActionShape({ ...base, maxConcurrentSubtasks: 3 })).not.toThrow()
+    expect(validateActionShape({ ...base, maxConcurrentSubtasks: 3 })).toMatchObject({ maxConcurrentSubtasks: 3 })
+    expect(() => validateActionShape({ ...base, maxConcurrentSubtasks: 0 })).toThrow(/maxConcurrentSubtasks/)
+    expect(() => validateActionShape({ ...base, maxConcurrentSubtasks: 9 })).toThrow(/maxConcurrentSubtasks/)
+    expect(() => validateActionShape({ ...base, maxConcurrentSubtasks: 1.5 })).toThrow(/maxConcurrentSubtasks/)
+  })
+
 
   it('拒绝未知 action 类型（白名单封闭）', () => {
     expect(() => validateActionShape({ ...base, type: 'rm -rf /' })).toThrow(ActionFormatError)
@@ -204,6 +217,7 @@ describe('decideApproval 与 pins.executionMode 校验（§7.1b）', () => {
     expect(() => validateActionShape({ ...base, decision: 'allow-all' })).toThrow(ActionFormatError)
     expect(() => validateActionShape({ type: 'decideApproval', requestId: 'da-2', taskId: 'tf_1', decision: 'allow' })).toThrow(/approvalId/)
   })
+
 
   it('createTask/updateContract 的 pins 接受 executionMode', () => {
     expect(() => validateActionShape({ type: 'createTask', requestId: 'r2', title: 't', description: 'd', pins: { executionMode: 'approval' } })).not.toThrow()

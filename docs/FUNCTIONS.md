@@ -427,6 +427,13 @@ type SubtaskStatus =
 - 校验：`capability` 必须在 `CAPABILITIES` 白名单内（`src/protocol/actions.ts`），否则 ActionFormatError。
 - FR-19 模板库后端（templates.json / 路由）保留但创建表单不再使用。
 
+### 4.16 全局默认与任务级覆盖：子 agent / 并发数（FR-23，2026-09-20）
+
+- **全局设置**（settings.json 持久化）新增 `defaultPresetId`（全局默认子 agent 预设，null = 宿主默认）；设置浮层新增「子 agent」下拉（数据源 `GET /api/taskflow/presets`，自宿主 agentPresets 服务投影，服务缺失降级为空目录）。
+- **创建表单展示全局默认并可任务级覆盖**：「子 agent」pill 组（全局默认 + 预设列表，默认项选中时展示当前全局默认名）与「并发数」pill 组（全局默认（N）+ 1–8）。
+- **任务级覆盖语义**：子 agent → `pins.presetId`（已有通道，缺省回退全局默认）；并发数 → `Task.maxConcurrentSubtasks`（1–8 白名单校验），调度器实际取 **min(全局上限, 任务级上限)**，只影响该任务内子任务的并行度，不突破全局 WIP。
+- FR-19 模板库后端（templates.json / 路由）保留但创建表单不再使用。
+
 ---
 
 ## 5. UI/UX 规格

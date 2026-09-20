@@ -37,6 +37,8 @@ export interface CreateTaskAction {
   pins?: Partial<{ workspace: string; presetId: string | null; permission: string; executionMode: import('./types.ts').ExecutionMode }>
   /** 能力预设（FR-22，可选）：id 须在 CAPABILITIES 内。 */
   capability?: string
+  /** 任务级子任务并发上限（FR-23，可选，1–8）：缺省跟随全局设置。 */
+  maxConcurrentSubtasks?: number
   autoStart?: boolean
   /** 创建后立即触发拆解（默认 true，对应 T2 的自动形态）。 */
   autoDecompose?: boolean
@@ -211,6 +213,12 @@ export function validateActionShape(action: unknown): TaskflowAction {
       validatePinsInput(action.pins, { optional: true })
       if (action.capability !== undefined && !CAPABILITIES.some(c => c.id === action.capability)) {
         throw new ActionFormatError(`capability must be one of: ${CAPABILITIES.map(c => c.id).join(', ')}.`)
+      }
+      if (action.maxConcurrentSubtasks !== undefined) {
+        const value = action.maxConcurrentSubtasks
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 8) {
+          throw new ActionFormatError('maxConcurrentSubtasks must be an integer between 1 and 8.')
+        }
       }
       validateAutoStartFlag(action.autoStart)
       validateAutoDecomposeFlag(action.autoDecompose)

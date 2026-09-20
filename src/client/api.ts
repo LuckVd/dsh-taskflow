@@ -4,7 +4,7 @@
  * @module dsh-taskflow/client
  */
 
-import type { ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
+import type { AgentPresetOption, ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
 import type { TaskTemplate } from '../protocol/types.ts'
 import type { TaskflowAction } from '../protocol/actions.ts'
 
@@ -24,6 +24,8 @@ export interface TaskflowTransport {
   getModels(): Promise<ModelCatalog>
   /** 交付物只读预览（§4.5b）：仅限该任务证据声明过的 artifacts 路径。 */
   getArtifactPreview(taskId: string, path: string): Promise<ArtifactPreview>
+  /** 子 agent 预设目录（FR-23）；部署未提供时抛错。 */
+  getPresets(): Promise<AgentPresetOption[]>
   /** 任务模板列表（FR-19）；部署未提供时抛错。 */
   getTemplates(): Promise<TaskTemplate[]>
   /** 覆盖模板全表（存为模板 / 删除）；服务端校验失败时抛错。 */
@@ -68,6 +70,11 @@ export function createHttpTransport(base = ''): TaskflowTransport {
     },
     getCachedState(): EngineState | null {
       return cache
+    },
+    async getPresets(): Promise<AgentPresetOption[]> {
+      const response = await fetch(`${base}/api/taskflow/presets`, { headers: { accept: 'application/json' } })
+      const body = (await readJson<{ presets?: AgentPresetOption[] }>(response)) as { presets?: AgentPresetOption[] }
+      return body.presets ?? []
     },
     async dispatch(action: TaskflowAction): Promise<DispatchResult> {
       const response = await fetch(`${base}/api/taskflow/action`, {

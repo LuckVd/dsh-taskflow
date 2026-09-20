@@ -34,8 +34,8 @@ export function validateGlobalSettings(raw: unknown): GlobalSettings {
   }
   const record = raw as Record<string, unknown>
   for (const key of Object.keys(record)) {
-    if (key !== 'decompose' && key !== 'execution' && key !== 'maxConcurrentSubtasks') {
-      throw new SettingsError(`未知字段：${key}（仅允许 decompose / execution / maxConcurrentSubtasks）`)
+    if (key !== 'decompose' && key !== 'execution' && key !== 'maxConcurrentSubtasks' && key !== 'defaultPresetId') {
+      throw new SettingsError(`未知字段：${key}（仅允许 decompose / execution / maxConcurrentSubtasks / defaultPresetId）`)
     }
   }
   let maxConcurrentSubtasks: number | undefined
@@ -46,10 +46,18 @@ export function validateGlobalSettings(raw: unknown): GlobalSettings {
     }
     maxConcurrentSubtasks = value
   }
+  let defaultPresetId: string | null | undefined
+  if (record.defaultPresetId !== undefined) {
+    if (record.defaultPresetId !== null && typeof record.defaultPresetId !== 'string') {
+      throw new SettingsError('defaultPresetId 必须是 null 或字符串')
+    }
+    defaultPresetId = record.defaultPresetId
+  }
   return {
     decompose: validateSlot(record.decompose, 'decompose'),
     execution: validateSlot(record.execution, 'execution'),
     ...(maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks } : {}),
+    ...(defaultPresetId !== undefined ? { defaultPresetId } : {}),
   }
 }
 

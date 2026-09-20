@@ -523,6 +523,7 @@ export class TaskflowEngine {
         createdBy: 'human',
         autoStart: action.autoStart ?? true,
         ...(action.capability !== undefined ? { capability: action.capability } : {}),
+        ...(action.maxConcurrentSubtasks !== undefined ? { maxConcurrentSubtasks: action.maxConcurrentSubtasks } : {}),
         permissionConfirmed: !this.needsPermissionConfirm(pins),
         decomposeSessionIds: [],
       }
@@ -1404,8 +1405,12 @@ export class TaskflowEngine {
         }
         continue
       }
+      // FR-23：任务级并发上限（缺省跟随全局）；任务在跑的会话数单独计数
+      const taskCap = task.maxConcurrentSubtasks ?? this.effectiveMaxConcurrent()
+      let taskRunning = task.subtasks.filter(s => s.status === 'in-progress' && s.sessionId !== undefined).length
       for (const sub of task.subtasks) {
         if (running >= this.effectiveMaxConcurrent()) return
+        if (taskRunning >= taskCap) break
         // 排队态：pending，或打回/重启后的 in-progress 且尚未取号
         const queued = sub.status === 'pending' || (sub.status === 'in-progress' && sub.sessionId === undefined)
         if (!queued) continue
@@ -1431,6 +1436,7 @@ export class TaskflowEngine {
         }
         launches.push({ taskId: task.id, subtaskId: sub.id, sessionId })
         running += 1
+        taskRunning += 1
       }
     }
   }
