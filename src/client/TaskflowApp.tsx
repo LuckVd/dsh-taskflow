@@ -9,6 +9,7 @@ import type { TaskflowTransport } from './api.ts'
 import {
   actorLabel,
   boardGroups,
+  dagLayout,
   decimalOf,
   filterTasks,
   formatBytes,
@@ -25,8 +26,9 @@ import {
   statusLabel,
   subtaskStatusLabel,
   subtaskWait,
+  truncateForDag,
 } from './view.ts'
-import type { CardSummary, PendingApprovalView, TimelineEntry } from './view.ts'
+import type { CardSummary, DagNode, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
 import {
@@ -42,10 +44,11 @@ import type { Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSett
 import { CAPABILITIES } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
-type TabId = 'contract' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
+type TabId = 'contract' | 'flow' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
 
 const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
   { id: 'contract', title: '合同' },
+  { id: 'flow', title: '流程' },
   { id: 'subtasks', title: '子任务' },
   { id: 'review', title: '验收' },
   { id: 'deliverables', title: '产物' },
@@ -1025,9 +1028,15 @@ function DetailModal({
   onRefresh: () => Promise<void>
   transport: TaskflowTransport
 }): JSX.Element {
-  // 默认落点（2026-09-12 口径）：review = 等终批，落验收页（验收页专注验收）；done =
-  // 验收完成，落「产物」页（不用再进验收页翻产物）；其余状态从合同看起。
-  const [tab, setTab] = useState<TabId>(task.status === 'review' ? 'review' : task.status === 'done' ? 'deliverables' : 'contract')
+  // 默认落点（2026-09-12 口径 + 2026-09-21 流程图）：review = 等终批，落验收页
+  // （验收页专注验收）；done = 验收完成，落「产物」页；in-progress = 执行中，
+  // 落「流程」页（点开就看正在执行的 DAG）；其余状态从合同看起。
+  const [tab, setTab] = useState<TabId>(
+    task.status === 'review' ? 'review'
+    : task.status === 'done' ? 'deliverables'
+    : task.status === 'in-progress' ? 'flow'
+    : 'contract',
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
@@ -1083,6 +1092,7 @@ function DetailModal({
           {error !== null && <div className="tf-banner" role="alert">{error}</div>}
           <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
           {tab === 'contract' && <ContractTab task={task} />}
+          {tab === 'flow' && <FlowTab task={task} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} />}
           {tab === 'deliverables' && <DeliverablesTab task={task} transport={transport} />}
@@ -1277,6 +1287,128 @@ function AcceptanceList({ items, title }: { items: AcceptanceItem[]; title: stri
           </div>
         ))
       )}
+    </div>
+  )
+}
+
+// —— 流程 tab（FR-12 可视化，2026-09-21）：子任务 DAG 的实时执行流程图 ——
+// 数据即快照（Subtask.deps + status），SSE change 每推一次整图重渲染，无需后端改动。
+
+/** DAG 节点卡与间距（px）：坐标 = 层号/层内序号换算，横向铺开，超宽容器滚动。 */
+const DAG_NODE_W = 192
+const DAG_NODE_H = 62
+const DAG_GAP_X = 56
+const DAG_GAP_Y = 14
+const DAG_PAD = 14
+
+function dagNodePos(node: DagNode): { x: number; y: number } {
+  return {
+    x: DAG_PAD + node.layer * (DAG_NODE_W + DAG_GAP_X),
+    y: DAG_PAD + node.index * (DAG_NODE_H + DAG_GAP_Y),
+  }
+}
+
+function FlowTab({ task }: { task: Task }): JSX.Element {
+  const layout = useMemo(() => dagLayout(task), [task])
+  if (task.subtasks.length === 0) {
+    return (
+      <div className="tf-section">
+        <span className="tf-section-title">执行流程</span>
+        <div className="tf-empty">
+          <span className="tf-empty-art">🗺️</span>
+          <span>{task.status === 'decomposing'
+            ? 'AI 正在拆解任务，完成后这里会展示子任务的依赖流程。'
+            : '该任务还没有子任务，拆解后这里展示依赖执行流程。'}</span>
+        </div>
+      </div>
+    )
+  }
+  const rows = Math.max(...layout.layerSizes)
+  const width = DAG_PAD * 2 + layout.layerCount * DAG_NODE_W + (layout.layerCount - 1) * DAG_GAP_X
+  const height = DAG_PAD * 2 + rows * DAG_NODE_H + (rows - 1) * DAG_GAP_Y
+  const nodeById = new Map(layout.nodes.map(n => [n.sub.id, n]))
+  const doneCount = task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length
+  return (
+    <div className="tf-section">
+      <span className="tf-section-title">执行流程（{doneCount}/{task.subtasks.length} 完成 · 实时）</span>
+      <span className="tf-hint">
+        依赖从左到右；琥珀框呼吸 = 会话执行中，蓝 = 待核验，绿 = 完成，红 = 受阻，灰 = 等依赖/排队。悬停节点与连线可看详情。
+      </span>
+      <div className="tf-dag-scroll">
+        <svg
+          className="tf-dag-svg"
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label={`子任务依赖流程图，共 ${task.subtasks.length} 个子任务、${layout.edges.length} 条依赖`}
+        >
+          {layout.edges.map((edge, i) => {
+            const target = nodeById.get(edge.to)
+            if (target === undefined) return null
+            const to = dagNodePos(target)
+            if (edge.missing) {
+              // 孤儿 dep：指向的依赖不存在，目标左侧画一小段红虚线桩提示数据异常
+              return (
+                <path
+                  key={`edge-${i}`}
+                  className="tf-dag-edge tf-dag-edge-missing"
+                  d={`M ${to.x - DAG_GAP_X / 2} ${to.y + DAG_NODE_H / 2} L ${to.x - 6} ${to.y + DAG_NODE_H / 2}`}
+                >
+                  <title>{`未知依赖 ${edge.from}（dep 指向的子任务不存在）`}</title>
+                </path>
+              )
+            }
+            const source = nodeById.get(edge.from)
+            if (source === undefined) return null
+            const from = dagNodePos(source)
+            const x1 = from.x + DAG_NODE_W
+            const y1 = from.y + DAG_NODE_H / 2
+            const x2 = to.x
+            const y2 = to.y + DAG_NODE_H / 2
+            const dx = Math.max(20, (x2 - x1) / 2)
+            const edgeClass =
+              source.sub.status === 'done' ? 'tf-dag-edge-done'
+              : target.sub.status === 'in-progress' && target.sub.sessionId !== undefined ? 'tf-dag-edge-flow'
+              : ''
+            return (
+              <path
+                key={`edge-${i}`}
+                className={`tf-dag-edge ${edgeClass}`}
+                d={`M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`}
+              >
+                <title>{`${source.sub.title} → ${target.sub.title}`}</title>
+              </path>
+            )
+          })}
+          {layout.nodes.map(node => {
+            const { x, y } = dagNodePos(node)
+            const status = node.sub.status
+            const line2 =
+              node.wait?.kind === 'deps'
+                ? `等依赖：${node.wait.blockers[0]}${node.wait.blockers.length > 1 ? ` 等 ${node.wait.blockers.length} 项` : ''}`
+                : node.wait?.kind === 'wip'
+                  ? '排队中（等并发空位）'
+                  : subtaskStatusLabel(status)
+            return (
+              <g key={node.sub.id} className={`tf-dag-node tf-dag-node-${status}`}>
+                <title>
+                  {`${node.sub.title} · ${subtaskStatusLabel(status)}` +
+                    (node.sub.round > 1 ? ` · 第 ${node.sub.round} 轮` : '') +
+                    (node.wait?.kind === 'deps' ? ` · 等待：${node.wait.blockers.join('、')}` : '')}
+                </title>
+                <rect x={x} y={y} width={DAG_NODE_W} height={DAG_NODE_H} rx={10} />
+                <circle cx={x + 14} cy={y + 17} r={4} />
+                <text className="tf-dag-title" x={x + 26} y={y + 21}>{truncateForDag(node.sub.title, 22)}</text>
+                <text className="tf-dag-sub" x={x + 14} y={y + 42}>{truncateForDag(line2, 26)}</text>
+                {node.sub.round > 1 && (
+                  <text className="tf-dag-round" x={x + DAG_NODE_W - 8} y={y + 16} textAnchor="end">{`R${node.sub.round}`}</text>
+                )}
+              </g>
+            )
+          })}
+        </svg>
+      </div>
     </div>
   )
 }

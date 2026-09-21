@@ -292,6 +292,90 @@ export function subtaskWait(task: Task, sub: Subtask): SubtaskWait | undefined {
   return { kind: 'wip', blockers: [] }
 }
 
+// —— DAG 流程图投影（FR-12 可视化：点进任务看正在执行的依赖流程）——
+
+export interface DagNode {
+  sub: Subtask
+  /** 0 起的层号：无有效依赖 = 0，否则 = max(依赖层) + 1（最长路径分层）。 */
+  layer: number
+  /** 同层内 0 起的序号（按拆解输出顺序排，稳定不跳）。 */
+  index: number
+  /** 排队原因（等依赖 / 等 WIP 空位）；非排队态为 undefined。复用 subtaskWait。 */
+  wait: SubtaskWait | undefined
+}
+
+export interface DagEdge {
+  from: string
+  to: string
+  /** dep 指向的子任务不存在（孤儿 dep，防御展示为虚线灰边）。 */
+  missing: boolean
+}
+
+export interface DagLayout {
+  nodes: DagNode[]
+  edges: DagEdge[]
+  /** 层数 = 最大层号 + 1（无子任务为 0）。 */
+  layerCount: number
+  /** 各层节点数（同层叠放的最高度，容器尺寸估算用）。 */
+  layerSizes: number[]
+}
+
+/**
+ * 子任务 DAG 的分层布局（纯投影，不含像素——坐标由组件按容器尺寸换算）：
+ * 最长路径分层（layer(v) = max(layer(u))+1，u∈deps），同层按拆解顺序纵排。
+ * deps 在 add/edit 时已校验无环；此处仍做收敛防御——手工改库等异常形态下
+ * 迭代不超过 n 轮即停（环边不再抬层，布局退化但不崩）。孤儿 dep 不参与分层。
+ */
+export function dagLayout(task: Task): DagLayout {
+  const byId = new Map(task.subtasks.map(s => [s.id, s]))
+  const layers = new Map<string, number>(task.subtasks.map(s => [s.id, 0]))
+  // 收敛式抬层：每轮扫全部节点，deps 层更高则自身抬到 dep+1；无环时 n 轮内必收敛。
+  for (let round = 0; round < task.subtasks.length; round += 1) {
+    let changed = false
+    for (const sub of task.subtasks) {
+      let layer = 0
+      for (const dep of sub.deps) {
+        if (!byId.has(dep)) continue
+        layer = Math.max(layer, (layers.get(dep) ?? 0) + 1)
+      }
+      if (layer > (layers.get(sub.id) ?? 0)) {
+        layers.set(sub.id, layer)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+  const layerSizes: number[] = []
+  const nodes: DagNode[] = task.subtasks.map(sub => {
+    const layer = layers.get(sub.id) ?? 0
+    const index = layerSizes[layer] ?? 0
+    layerSizes[layer] = index + 1
+    return { sub, layer, index, wait: subtaskWait(task, sub) }
+  })
+  const edges: DagEdge[] = []
+  for (const sub of task.subtasks) {
+    for (const dep of sub.deps) edges.push({ from: dep, to: sub.id, missing: !byId.has(dep) })
+  }
+  return { nodes, edges, layerCount: layerSizes.length, layerSizes }
+}
+
+/** SVG text 单行截断（无 CSS ellipsis 可用）：超长加省略号，CJK 按宽字符计。 */
+export function truncateForDag(text: string, maxUnits: number): string {
+  const widthOf = (ch: string): number => (ch.charCodeAt(0) > 0xff ? 2 : 1)
+  const chars = [...text]
+  const total = chars.reduce((sum, ch) => sum + widthOf(ch), 0)
+  if (total <= maxUnits) return text
+  let kept = 0
+  let out = ''
+  for (const ch of chars) {
+    const w = widthOf(ch)
+    if (kept + w > maxUnits - 2) break
+    out += ch
+    kept += w
+  }
+  return `${out}…`
+}
+
 /** 距现在的相对时间。 */
 export function relativeTime(at: number, now = Date.now()): string {
   const delta = Math.max(0, now - at)

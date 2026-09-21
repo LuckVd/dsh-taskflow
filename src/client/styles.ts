@@ -338,6 +338,36 @@ export const TASKFLOW_CSS = `
 .tf-ac-id { font-family: ${V.codeFont}; font-size: 11px; color: ${V.label3}; flex: none; }
 .tf-hint { font-size: 12px; line-height: 1.5; color: ${V.label3}; overflow-wrap: anywhere; }
 
+/* —— 流程 tab：DAG 执行流程图（FR-12 可视化）—— */
+/* 状态色语言对齐 StatusDot：执行中琥珀（呼吸）/ 待核验蓝 / 完成绿 / 受阻红 / 等待灰。 */
+.tf-dag-scroll { overflow-x: auto; padding: 2px 0 8px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
+.tf-dag-svg { display: block; max-width: none; }
+.tf-dag-edge { fill: none; stroke: ${V.borderL2}; stroke-width: 1.4; }
+.tf-dag-edge-done { stroke: ${V.inkGreen}; opacity: 0.55; }
+.tf-dag-edge-flow { stroke: ${V.business}; stroke-width: 1.8; stroke-dasharray: 6 5; animation: tf-dag-dash 1.1s linear infinite; }
+.tf-dag-edge-missing { stroke: ${V.errorSecondary}; stroke-dasharray: 3 4; opacity: 0.75; }
+@keyframes tf-dag-dash { to { stroke-dashoffset: -11; } }
+.tf-dag-node > rect { fill: ${V.bgBase}; stroke: ${V.borderL2}; stroke-width: 1.4; }
+.tf-dag-node > circle { fill: ${V.label3}; }
+.tf-dag-node > text { font-family: ${V.font}; fill: ${V.label}; }
+.tf-dag-title { font-size: 12px; font-weight: 600; }
+.tf-dag-sub { font-size: 10.5px; fill: ${V.label2}; }
+.tf-dag-round { font-size: 10px; font-weight: 700; fill: ${V.warnLabel}; }
+.tf-dag-node-done > rect { stroke: ${V.inkGreen}; fill: ${V.successTertiary}; }
+.tf-dag-node-done > circle { fill: ${V.inkGreen}; }
+.tf-dag-node-done { opacity: 0.82; }
+.tf-dag-node-in-progress > rect { stroke: ${V.warn}; stroke-width: 1.6; animation: tf-dag-breathe 1.8s ease-in-out infinite; }
+.tf-dag-node-in-progress > circle { fill: ${V.warn}; }
+@keyframes tf-dag-breathe { 0%, 100% { stroke-width: 1.6; } 50% { stroke-width: 2.8; } }
+.tf-dag-node-review > rect { stroke: ${V.business}; }
+.tf-dag-node-review > circle { fill: ${V.business}; }
+.tf-dag-node-blocked > rect, .tf-dag-node-rejected > rect { stroke: ${V.errorSecondary}; fill: ${V.errorTertiary}; }
+.tf-dag-node-blocked > circle, .tf-dag-node-rejected > circle { fill: ${V.errorSecondary}; }
+.tf-dag-node-pending > rect { fill: ${V.bgLayer2}; stroke-dasharray: 4 3; }
+@media (prefers-reduced-motion: reduce) {
+  .tf-dag-edge-flow, .tf-dag-node-in-progress > rect { animation: none; }
+}
+
 .tf-verdict { font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }
 .tf-verdict-pass { color: ${V.inkGreen}; background: ${V.successTertiary}; }
 .tf-verdict-partial { color: ${V.warnLabel}; background: ${V.warnTertiary}; }

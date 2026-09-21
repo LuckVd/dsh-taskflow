@@ -15,6 +15,8 @@ import {
   subtaskStatusLabel,
   subtaskWait,
   reportStats,
+  dagLayout,
+  truncateForDag,
 } from '../../src/client/view.ts'
 import type { Subtask, Task } from '../../src/protocol/types.ts'
 
@@ -391,6 +393,96 @@ describe('subtaskWait（排队原因投影）', () => {
 
     const reviewTask = mkTask({ status: 'review', subtasks: [mkSubtask({ status: 'pending' })] })
     expect(subtaskWait(reviewTask, reviewTask.subtasks[0]!)).toBeUndefined()
+  })
+})
+
+// —— DAG 流程图投影（FR-12 可视化：分层布局） ——
+
+describe('dagLayout（子任务 DAG 分层）', () => {
+  it('链式与菱形依赖：最长路径分层（后序层号 = max(依赖层)+1）', () => {
+    // 菱形：s1 → s2/s3 → s4（s4 必须落在 s2、s3 之下）
+    const task = mkTask({
+      subtasks: [
+        mkSubtask({ id: 's1', deps: [] }),
+        mkSubtask({ id: 's2', deps: ['s1'] }),
+        mkSubtask({ id: 's3', deps: ['s1'] }),
+        mkSubtask({ id: 's4', deps: ['s2', 's3'] }),
+      ],
+    })
+    const layout = dagLayout(task)
+    const layerOf = new Map(layout.nodes.map(n => [n.sub.id, n.layer]))
+    expect(layerOf.get('s1')).toBe(0)
+    expect(layerOf.get('s2')).toBe(1)
+    expect(layerOf.get('s3')).toBe(1)
+    expect(layerOf.get('s4')).toBe(2)
+    expect(layout.layerCount).toBe(3)
+    expect(layout.layerSizes).toEqual([1, 2, 1])
+    // 同层内按拆解顺序纵排（index 稳定）
+    const s2 = layout.nodes.find(n => n.sub.id === 's2')!
+    const s3 = layout.nodes.find(n => n.sub.id === 's3')!
+    expect(s2.index).toBe(0)
+    expect(s3.index).toBe(1)
+    // 边 = 每条 dep 一条，方向 from dep → to 依赖者
+    expect(layout.edges).toHaveLength(4)
+    expect(layout.edges).toContainEqual({ from: 's2', to: 's4', missing: false })
+    expect(layout.edges).toContainEqual({ from: 's3', to: 's4', missing: false })
+  })
+
+  it('平铺无依赖：全部 0 层单列；等待原因投影进节点', () => {
+    const s1 = mkSubtask({ id: 's1', title: '独立甲', status: 'pending', sessionId: undefined })
+    const s2 = mkSubtask({ id: 's2', title: '独立乙', status: 'in-progress', sessionId: 'sess-a' })
+    const task = mkTask({ subtasks: [s1, s2] })
+    const layout = dagLayout(task)
+    expect(layout.layerCount).toBe(1)
+    expect(layout.layerSizes).toEqual([2])
+    expect(layout.edges).toHaveLength(0)
+    // 平铺排队 → 等 WIP 空位；运行中 → 无等待
+    const n1 = layout.nodes.find(n => n.sub.id === 's1')!
+    const n2 = layout.nodes.find(n => n.sub.id === 's2')!
+    expect(n1.wait).toEqual({ kind: 'wip', blockers: [] })
+    expect(n2.wait).toBeUndefined()
+  })
+
+  it('孤儿 dep 不参与分层、边标 missing；未知依赖者仍从 0 层起排', () => {
+    const task = mkTask({
+      subtasks: [
+        mkSubtask({ id: 's1', deps: [] }),
+        mkSubtask({ id: 's2', deps: ['s404'] }),
+        mkSubtask({ id: 's3', deps: ['s2'] }),
+      ],
+    })
+    const layout = dagLayout(task)
+    const layerOf = new Map(layout.nodes.map(n => [n.sub.id, n.layer]))
+    expect(layerOf.get('s2')).toBe(0) // s404 不存在，不抬层
+    expect(layerOf.get('s3')).toBe(1)
+    expect(layout.edges).toContainEqual({ from: 's404', to: 's2', missing: true })
+    expect(layout.edges).toContainEqual({ from: 's2', to: 's3', missing: false })
+  })
+
+  it('异常环边防御：不无限抬层（收敛上限内停止，布局退化不崩）', () => {
+    // add/edit 已校验无环；手工改库等异常形态下不得死循环/抛错
+    const task = mkTask({
+      subtasks: [
+        mkSubtask({ id: 's1', deps: ['s2'] }),
+        mkSubtask({ id: 's2', deps: ['s1'] }),
+      ],
+    })
+    const layout = dagLayout(task)
+    expect(layout.nodes).toHaveLength(2)
+    // 收敛防御的合同：有界（≤ 2×节点数）、不抛错、不悬挂
+    for (const node of layout.nodes) {
+      expect(node.layer).toBeGreaterThanOrEqual(0)
+      expect(node.layer).toBeLessThanOrEqual(task.subtasks.length * 2)
+    }
+  })
+})
+
+describe('truncateForDag（SVG 单行截断）', () => {
+  it('不超长原样返回；CJK 按双宽计，超长加省略号', () => {
+    expect(truncateForDag('短标题', 10)).toBe('短标题')
+    expect(truncateForDag('实现用户登录模块', 10)).toBe('实现用户…')
+    expect(truncateForDag('abcdefghijk', 8)).toBe('abcdef…')
+    expect(truncateForDag('', 5)).toBe('')
   })
 })
 

@@ -206,6 +206,22 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(text).toContain('批语')
   })
 
+  it('流程 tab（FR-12 可视化）：tab 存在 → DAG SVG 渲染节点（含状态类名与标题）', async () => {
+    const doc = dom.window.document
+    const flowTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('流程'))
+    expect(flowTab).toBeTruthy()
+    ;(flowTab as HTMLElement).click()
+    // mock 拆解为 2 个无依赖子任务 → 单层两节点、无边
+    await waitFor(() => doc.querySelector('.tf-dag-svg') !== null)
+    const svg = doc.querySelector('.tf-dag-svg')!
+    expect(svg.getAttribute('role')).toBe('img')
+    expect(svg.querySelectorAll('g.tf-dag-node')).toHaveLength(2)
+    // 第二轮回到待验收：子任务为 review（举证完毕）→ 状态类名 = 待核验蓝
+    expect(doc.querySelector('g.tf-dag-node-review')).toBeTruthy()
+    expect(svg.querySelectorAll('path.tf-dag-edge')).toHaveLength(0)
+    expect(svg.textContent).toContain('实现核心逻辑')
+  })
+
   it('新建弹窗（Bento 单列）：必填校验 + 能力选择（FR-22）+ 工作目录选择器（FR-21）', async () => {
     const doc = dom.window.document
     ;(doc.querySelector('[aria-label="关闭"]') as HTMLElement).click()
@@ -257,7 +273,6 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     ;(submit as HTMLElement).click()
     await waitFor(() => {
       const task = engine.getState().ledger.tasks.find(t => t.title === '示例任务')
-      if (task !== undefined) console.log('DEBUG-TASK', JSON.stringify({ cap: task.capability, ws: task.contract.pins.workspace, dir: firstDirName }))
       return task !== undefined && task.capability === 'bugfix' && task.contract.pins.workspace.endsWith(firstDirName.replace(/\/$/, ''))
     }, { timeout: 5000 })
     // 收起弹窗，还回看板（后续用例从看板起步）
