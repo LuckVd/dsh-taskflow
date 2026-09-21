@@ -16,6 +16,7 @@ import {
   subtaskWait,
   reportStats,
   dagLayout,
+  dagPhases,
   truncateForDag,
 } from '../../src/client/view.ts'
 import type { Subtask, Task } from '../../src/protocol/types.ts'
@@ -483,6 +484,50 @@ describe('truncateForDag（SVG 单行截断）', () => {
     expect(truncateForDag('实现用户登录模块', 10)).toBe('实现用户…')
     expect(truncateForDag('abcdefghijk', 8)).toBe('abcdef…')
     expect(truncateForDag('', 5)).toBe('')
+  })
+})
+
+describe('dagPhases（任务管线相位：拆解 → 终检 → 终批）', () => {
+  it('拆解中：拆解 = 运行中，终检/终批 = 等待', () => {
+    const task = mkTask({ status: 'decomposing' })
+    const [decompose, finalcheck, accept] = dagPhases(task)
+    expect(decompose).toMatchObject({ id: 'decompose', status: 'in-progress' })
+    expect(decompose.line).toContain('拆解会话运行中')
+    expect(finalcheck).toMatchObject({ id: 'finalcheck', status: 'pending' })
+    expect(accept).toMatchObject({ id: 'accept', status: 'pending' })
+  })
+
+  it('draft 未开始：拆解 = 待开始；跑过拆解会话 = 完成', () => {
+    const [decompose] = dagPhases(mkTask({ status: 'draft' }))
+    expect(decompose).toMatchObject({ status: 'pending' })
+    expect(decompose.line).toContain('待开始')
+    const [done] = dagPhases(mkTask({ status: 'in-progress', decomposeSessionIds: ['sess-d'] }))
+    expect(done).toMatchObject({ status: 'done' })
+  })
+
+  it('终检：会话运行中 = 运行；证据产出或任务终态 = 完成', () => {
+    const running = dagPhases(mkTask({ status: 'in-progress', finalizeSessionId: 'sess-f' }))[1]!
+    expect(running).toMatchObject({ id: 'finalcheck', status: 'in-progress' })
+    const evidence = {
+      submittedAt: 1,
+      changesSummary: 's',
+      verification: [],
+      selfCheck: [],
+      refs: { sessionId: 'sess-f' },
+    }
+    const withEvidence = dagPhases(mkTask({ status: 'review', evidence }))[1]!
+    expect(withEvidence).toMatchObject({ id: 'finalcheck', status: 'done' })
+    const terminal = dagPhases(mkTask({ status: 'done' }))[1]!
+    expect(terminal).toMatchObject({ id: 'finalcheck', status: 'done' })
+  })
+
+  it('终批：review = 等人；done = 通过；cancelled = 已取消', () => {
+    const review = dagPhases(mkTask({ status: 'review' }))[2]!
+    expect(review).toMatchObject({ id: 'accept', status: 'review', line: '等待人工终批' })
+    const done = dagPhases(mkTask({ status: 'done' }))[2]!
+    expect(done).toMatchObject({ status: 'done', line: '验收通过' })
+    const cancelled = dagPhases(mkTask({ status: 'cancelled' }))[2]!
+    expect(cancelled).toMatchObject({ status: 'blocked', line: '任务已取消' })
   })
 })
 

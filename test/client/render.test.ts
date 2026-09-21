@@ -69,18 +69,24 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
         },
       } as unknown as Response
     }) as typeof fetch
-    // EventSource → 引擎订阅
-    const listeners: Array<(kind: string) => void> = []
+    // EventSource → 引擎订阅。语义对齐真实浏览器：监听器常驻（每次 revision 都触发），
+    // close() 才注销——此前的 splice(0) 一次性消费让挂载后只有首个 revision 刷新 UI，
+    // 后台推进（打回→重跑→终检）全靠 dispatch 兜底，SSE 实时性从未真正被测到。
     window.EventSource = class {
+      readonly ownListeners: Array<(kind: string) => void> = []
+      readonly unsubscribe: () => void
       constructor() {
-        engine.subscribe(() => {
-          for (const listener of listeners.splice(0)) listener('change')
+        this.unsubscribe = engine.subscribe(() => {
+          for (const listener of this.ownListeners) listener('change')
         })
       }
       addEventListener(_kind: string, handler: (kind: string) => void): void {
-        listeners.push(handler)
+        this.ownListeners.push(handler)
       }
-      close(): void {}
+      close(): void {
+        this.ownListeners.length = 0
+        this.unsubscribe()
+      }
     } as unknown as typeof EventSource
 
     window.eval(readFileSync(bundlePath, 'utf8') + ';window.__taskflowTest = __taskflowTest;')
@@ -206,19 +212,29 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(text).toContain('批语')
   })
 
-  it('流程 tab（FR-12 可视化）：tab 存在 → DAG SVG 渲染节点（含状态类名与标题）', async () => {
+  it('流程 tab（FR-12 可视化）：管线相位药丸 + DAG 子任务节点（状态类名与标题）', async () => {
     const doc = dom.window.document
     const flowTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('流程'))
     expect(flowTab).toBeTruthy()
     ;(flowTab as HTMLElement).click()
-    // mock 拆解为 2 个无依赖子任务 → 单层两节点、无边
-    await waitFor(() => doc.querySelector('.tf-dag-svg') !== null)
+    // 等 UI 追上引擎终态（React 异步 flush：弱条件「svg 存在」会在旧渲染帧通过）
+    await waitFor(() =>
+      doc.querySelector('.tf-dag-svg') !== null &&
+      doc.querySelectorAll('g.tf-dag-phase-done').length === 2 &&
+      doc.querySelector('g.tf-dag-phase-review') !== null,
+    )
     const svg = doc.querySelector('.tf-dag-svg')!
     expect(svg.getAttribute('role')).toBe('img')
+    // 相位药丸 ×3：review 态 = 拆解 done + 终检 done（引擎已产出任务级证据）+ 终批待人
+    expect(svg.querySelectorAll('g.tf-dag-phase')).toHaveLength(3)
+    expect(svg.querySelectorAll('g.tf-dag-phase-done')).toHaveLength(2)
+    expect(doc.querySelector('g.tf-dag-phase-review')).toBeTruthy()
+    expect(svg.textContent).toContain('等待人工终批')
+    // mock 拆解为 2 个无依赖子任务 → 两节点（review = 待核验蓝）；相位连线：
+    // 拆解→根×2、叶→终检×2、终检→终批×1（子任务间无依赖边）
     expect(svg.querySelectorAll('g.tf-dag-node')).toHaveLength(2)
-    // 第二轮回到待验收：子任务为 review（举证完毕）→ 状态类名 = 待核验蓝
     expect(doc.querySelector('g.tf-dag-node-review')).toBeTruthy()
-    expect(svg.querySelectorAll('path.tf-dag-edge')).toHaveLength(0)
+    expect(svg.querySelectorAll('path.tf-dag-edge')).toHaveLength(5)
     expect(svg.textContent).toContain('实现核心逻辑')
   })
 

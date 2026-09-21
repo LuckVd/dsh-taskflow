@@ -10,6 +10,7 @@ import {
   actorLabel,
   boardGroups,
   dagLayout,
+  dagPhases,
   decimalOf,
   filterTasks,
   formatBytes,
@@ -28,7 +29,7 @@ import {
   subtaskWait,
   truncateForDag,
 } from './view.ts'
-import type { CardSummary, DagNode, PendingApprovalView, TimelineEntry } from './view.ts'
+import type { CardSummary, DagNode, DagPhase, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
 import {
@@ -1291,8 +1292,9 @@ function AcceptanceList({ items, title }: { items: AcceptanceItem[]; title: stri
   )
 }
 
-// —— 流程 tab（FR-12 可视化，2026-09-21）：子任务 DAG 的实时执行流程图 ——
-// 数据即快照（Subtask.deps + status），SSE change 每推一次整图重渲染，无需后端改动。
+// —— 流程 tab（FR-12 可视化，2026-09-21）：任务管线的实时执行流程图 ——
+// 数据即快照（相位状态 + Subtask.deps/status），SSE change 每推一次整图重渲染，无需后端改动。
+// 管线：AI 拆解（药丸）→ 子任务 DAG（卡片，整体右移一层）→ AI 终检（药丸）→ 人工终批（药丸）。
 
 /** DAG 节点卡与间距（px）：坐标 = 层号/层内序号换算，横向铺开，超宽容器滚动。 */
 const DAG_NODE_W = 192
@@ -1301,38 +1303,42 @@ const DAG_GAP_X = 56
 const DAG_GAP_Y = 14
 const DAG_PAD = 14
 
+/** 拆解相位占第 0 层：子任务层号 +1；终检/终批在 layerCount+1 / +2。 */
+function dagLayerX(layer: number): number {
+  return DAG_PAD + layer * (DAG_NODE_W + DAG_GAP_X)
+}
+
 function dagNodePos(node: DagNode): { x: number; y: number } {
-  return {
-    x: DAG_PAD + node.layer * (DAG_NODE_W + DAG_GAP_X),
-    y: DAG_PAD + node.index * (DAG_NODE_H + DAG_GAP_Y),
-  }
+  return { x: dagLayerX(node.layer + 1), y: DAG_PAD + node.index * (DAG_NODE_H + DAG_GAP_Y) }
 }
 
 function FlowTab({ task }: { task: Task }): JSX.Element {
   const layout = useMemo(() => dagLayout(task), [task])
-  if (task.subtasks.length === 0) {
-    return (
-      <div className="tf-section">
-        <span className="tf-section-title">执行流程</span>
-        <div className="tf-empty">
-          <span className="tf-empty-art">🗺️</span>
-          <span>{task.status === 'decomposing'
-            ? 'AI 正在拆解任务，完成后这里会展示子任务的依赖流程。'
-            : '该任务还没有子任务，拆解后这里展示依赖执行流程。'}</span>
-        </div>
-      </div>
-    )
-  }
-  const rows = Math.max(...layout.layerSizes)
-  const width = DAG_PAD * 2 + layout.layerCount * DAG_NODE_W + (layout.layerCount - 1) * DAG_GAP_X
+  const phases = useMemo(() => dagPhases(task), [task])
+  const phaseById = new Map(phases.map(p => [p.id, p]))
+  const rows = Math.max(1, ...layout.layerSizes)
+  const totalLayers = 3 + layout.layerCount // 拆解 + 子任务层 + 终检 + 终批
+  const width = DAG_PAD * 2 + totalLayers * DAG_NODE_W + (totalLayers - 1) * DAG_GAP_X
   const height = DAG_PAD * 2 + rows * DAG_NODE_H + (rows - 1) * DAG_GAP_Y
   const nodeById = new Map(layout.nodes.map(n => [n.sub.id, n]))
   const doneCount = task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length
+  // 相位药丸纵向上放第一行（稳定不跳；与根子任务同行）
+  const phasePos = (layer: number) => ({ x: dagLayerX(layer), y: DAG_PAD })
+  const decomposeBox = phasePos(0)
+  const finalcheckBox = phasePos(layout.layerCount + 1)
+  const acceptBox = phasePos(layout.layerCount + 2)
+  // 根 = 没有被任何有效 dep 边指向的子任务（孤儿 dep 的桩不算入边）
+  const targeted = new Set(layout.edges.filter(e => !e.missing).map(e => e.to))
+  const roots = layout.nodes.filter(n => !targeted.has(n.sub.id))
+  const leaves = layout.nodes.filter(n => !layout.edges.some(e => e.from === n.sub.id))
+  const finalcheckRunning = phaseById.get('finalcheck')?.status === 'in-progress'
   return (
     <div className="tf-section">
-      <span className="tf-section-title">执行流程（{doneCount}/{task.subtasks.length} 完成 · 实时）</span>
+      <span className="tf-section-title">
+        执行流程（{doneCount}/{task.subtasks.length} 完成{task.subtasks.length === 0 && task.status === 'decomposing' ? ' · 拆解中' : ''} · 实时）
+      </span>
       <span className="tf-hint">
-        依赖从左到右；琥珀框呼吸 = 会话执行中，蓝 = 待核验，绿 = 完成，红 = 受阻，灰 = 等依赖/排队。悬停节点与连线可看详情。
+        任务管线从左到右：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。悬停可看详情。
       </span>
       <div className="tf-dag-scroll">
         <svg
@@ -1341,8 +1347,55 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           role="img"
-          aria-label={`子任务依赖流程图，共 ${task.subtasks.length} 个子任务、${layout.edges.length} 条依赖`}
+          aria-label={`任务执行流程图：拆解、${task.subtasks.length} 个子任务、终检、人工终批`}
         >
+          {(() => {
+            // —— 相位连线：拆解 → 根（无根时直连终检）；叶子 → 终检 → 终批 ——
+            const edgeTo = (x1: number, y1: number, x2: number, y2: number, cls: string, key: string, title: string) => {
+              const dx = Math.max(20, (x2 - x1) / 2)
+              return (
+                <path key={key} className={`tf-dag-edge ${cls}`} d={`M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`}>
+                  <title>{title}</title>
+                </path>
+              )
+            }
+            const decomposeDone = phaseById.get('decompose')?.status === 'done'
+            const phaseEdgeClass = decomposeDone ? 'tf-dag-edge-done' : ''
+            const headEdges = roots.length > 0
+              ? roots.map(root => {
+                  const to = dagNodePos(root)
+                  return edgeTo(
+                    decomposeBox.x + DAG_NODE_W, decomposeBox.y + DAG_NODE_H / 2,
+                    to.x, to.y + DAG_NODE_H / 2,
+                    phaseEdgeClass, `phase-head-${root.sub.id}`,
+                    `拆解完成 → ${root.sub.title}`,
+                  )
+                })
+              : [edgeTo(
+                  decomposeBox.x + DAG_NODE_W, decomposeBox.y + DAG_NODE_H / 2,
+                  finalcheckBox.x, finalcheckBox.y + DAG_NODE_H / 2,
+                  phaseEdgeClass, 'phase-head-direct',
+                  task.subtasks.length === 0 ? '拆解 → 终检（无子任务形态）' : '拆解 → 终检',
+                )]
+            const tailEdges = leaves.map(leaf => {
+              const from = dagNodePos(leaf)
+              return edgeTo(
+                from.x + DAG_NODE_W, from.y + DAG_NODE_H / 2,
+                finalcheckBox.x, finalcheckBox.y + DAG_NODE_H / 2,
+                finalcheckRunning ? 'tf-dag-edge-flow' : leaf.sub.status === 'done' ? 'tf-dag-edge-done' : '',
+                `phase-tail-${leaf.sub.id}`,
+                `${leaf.sub.title} → 终检`,
+              )
+            })
+            const acceptEdge = edgeTo(
+              finalcheckBox.x + DAG_NODE_W, finalcheckBox.y + DAG_NODE_H / 2,
+              acceptBox.x, acceptBox.y + DAG_NODE_H / 2,
+              phaseById.get('accept')?.status === 'done' ? 'tf-dag-edge-done' : '',
+              'phase-accept',
+              '终检 → 人工终批',
+            )
+            return [...headEdges, ...tailEdges, acceptEdge]
+          })()}
           {layout.edges.map((edge, i) => {
             const target = nodeById.get(edge.to)
             if (target === undefined) return null
@@ -1381,6 +1434,22 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
               </path>
             )
           })}
+          {(() => {
+            // —— 相位药丸节点（居中排版；状态色语言与子任务卡一致） ——
+            const boxes: Array<{ phase: DagPhase; box: { x: number; y: number } }> = [
+              { phase: phases[0]!, box: decomposeBox },
+              { phase: phases[1]!, box: finalcheckBox },
+              { phase: phases[2]!, box: acceptBox },
+            ]
+            return boxes.map(({ phase, box }) => (
+              <g key={phase.id} className={`tf-dag-phase tf-dag-phase-${phase.status}`}>
+                <title>{`${phase.label} · ${phase.line}`}</title>
+                <rect x={box.x} y={box.y} width={DAG_NODE_W} height={DAG_NODE_H} rx={DAG_NODE_H / 2} />
+                <text className="tf-dag-phase-label" x={box.x + DAG_NODE_W / 2} y={box.y + 26} textAnchor="middle">{phase.label}</text>
+                <text className="tf-dag-sub" x={box.x + DAG_NODE_W / 2} y={box.y + 44} textAnchor="middle">{phase.line}</text>
+              </g>
+            ))
+          })()}
           {layout.nodes.map(node => {
             const { x, y } = dagNodePos(node)
             const status = node.sub.status

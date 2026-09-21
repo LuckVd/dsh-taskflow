@@ -435,14 +435,15 @@ type SubtaskStatus =
 - **模型（FR-24）**：创建表单下拉（数据源既有 `GET /api/taskflow/models` 目录，按 provider 分组，同全局设置浮层形态），默认「跟随全局设置」；选定后落 `Task.model`，该任务的拆解 / 执行 / 终检会话都用它，不随全局两槽。
 - 子 agent 预设（agentPresets）经核实非需求所指：`GET /api/taskflow/presets` 投影保留（兼容宿主 async `list()`、过滤 broken），但创建表单与全局设置不再使用；`defaultPresetId` 设置项保留校验（向后兼容）。
 
-### 4.17 子任务 DAG 流程图（FR-12 可视化，2026-09-21）
+### 4.17 子任务 DAG 流程图（FR-12 可视化，2026-09-21；同日二期：任务管线相位）
 
 - 任务详情弹窗新增**「流程」tab**（合同之后、子任务之前）；**in-progress 任务的默认落点**改为流程 tab（review/done 的验收页/产物页落点不变）——点开执行中的任务第一眼就是正在跑的依赖流程。
-- 数据零新增：`Subtask.deps` + `status` 本就在每次快照里，SSE `change` 每推一次整图重渲染，实时性与看板列同源同频。
+- **任务管线相位（二期）**：图为完整生命周期 `AI 拆解 → 子任务 DAG → AI 终检 → 人工终批`——首尾三个**药丸相位节点**（`dagPhases` 纯投影，`view.ts`）：拆解（decomposing = 琥珀呼吸；跑过拆解会话 = 完成）、终检（`finalizeSessionId` = 运行中；任务级证据产出或任务终态 = 完成）、终批（review = 蓝待人；done = 绿通过；cancelled = 红已取消）。相位连线：拆解 → 各根子任务（无子任务时直连终检）、叶子 → 终检 → 终批；拆解完成后相位边转绿淡化，终检运行中入边蓝色流动。子任务层整体右移一层。**拆解中不再是空占位**——头节点药丸呼吸即「正在拆解」。
+- 数据零新增：相位状态（`task.status` / `decomposeSessionIds` / `finalizeSessionId` / `evidence`）与 `Subtask.deps` + `status` 本就在每次快照里，SSE `change` 每推一次整图重渲染，实时性与看板列同源同频。
 - 布局：`dagLayout`（`src/client/view.ts` 纯投影）——最长路径分层（`layer(v)=max(layer(dep))+1`），同层按拆解顺序纵排，左→右贝塞尔连线；孤儿 dep 画红虚线桩（防御展示，不参与分层）；add/edit 已校验无环，仍做收敛防御（异常环边不崩、布局退化有界）。
-- 节点 = 圆角卡（状态点 + 标题 + 状态/等待行 + 轮次角标）：状态色语言对齐 `StatusDot`——执行中琥珀描边**呼吸**（`tf-dag-breathe`）、待核验蓝、完成绿（填充淡化）、受阻红、等待灰虚线框；等待行复用 `subtaskWait`（等依赖：列出阻塞者 / 排队中）。指向运行中会话的连线为蓝色**虚线流动**（`tf-dag-dash`）；`prefers-reduced-motion` 下两处动画均关闭。
-- 降级：平铺无依赖 = 单层状态条；未拆解（decomposing）显示拆解中占位；图超宽容器横向滚动；节点/连线 `<title>` 原生 tooltip（全称 + 等待原因）。
-- 无新增依赖（不引 dagre 等）：每任务子任务量级（通常 <20）手写分层足够，且布局纯函数可单测（`test/unit/view.test.ts`）；渲染冒烟在 `test/client/render.test.ts`。
+- 子任务节点 = 圆角卡（状态点 + 标题 + 状态/等待行 + 轮次角标）：状态色语言对齐 `StatusDot`——执行中琥珀描边**呼吸**（`tf-dag-breathe`）、待核验蓝、完成绿（填充淡化）、受阻红、等待灰虚线框；等待行复用 `subtaskWait`（等依赖：列出阻塞者 / 排队中）。指向运行中会话的连线为蓝色**虚线流动**（`tf-dag-dash`）；`prefers-reduced-motion` 下动画均关闭。
+- 降级：平铺无依赖 = 单层状态条；未拆解 = 三药丸骨架（拆解待开始/运行中）；图超宽容器横向滚动；节点/连线 `<title>` 原生 tooltip（全称 + 等待原因）。
+- 无新增依赖（不引 dagre 等）：每任务子任务量级（通常 <20）手写分层足够，且布局纯函数可单测（`test/unit/view.test.ts`：分层/孤儿 dep/环防御/相位投影/截断）；渲染冒烟在 `test/client/render.test.ts`（含相位药丸与管线连线断言；夹具 EventSource 模拟已改为常驻监听语义，SSE 实时性真实生效）。
 
 ---
 

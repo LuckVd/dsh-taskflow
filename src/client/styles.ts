@@ -364,8 +364,19 @@ export const TASKFLOW_CSS = `
 .tf-dag-node-blocked > rect, .tf-dag-node-rejected > rect { stroke: ${V.errorSecondary}; fill: ${V.errorTertiary}; }
 .tf-dag-node-blocked > circle, .tf-dag-node-rejected > circle { fill: ${V.errorSecondary}; }
 .tf-dag-node-pending > rect { fill: ${V.bgLayer2}; stroke-dasharray: 4 3; }
+/* 相位药丸（拆解/终检/终批）：与子任务卡同色语言，形态区分为药丸 + 居中排版 */
+.tf-dag-phase > rect { fill: ${V.bgLayer2}; stroke: ${V.borderL2}; stroke-width: 1.4; }
+.tf-dag-phase > text { font-family: ${V.font}; }
+.tf-dag-phase-label { font-size: 12.5px; font-weight: 700; fill: ${V.label}; }
+.tf-dag-phase-in-progress > rect { stroke: ${V.warn}; stroke-width: 1.6; animation: tf-dag-breathe 1.8s ease-in-out infinite; }
+.tf-dag-phase-done > rect { stroke: ${V.inkGreen}; fill: ${V.successTertiary}; }
+.tf-dag-phase-done .tf-dag-phase-label { fill: ${V.inkGreen}; }
+.tf-dag-phase-review > rect { stroke: ${V.business}; fill: ${V.businessTertiary}; }
+.tf-dag-phase-review .tf-dag-phase-label { fill: ${V.business}; }
+.tf-dag-phase-blocked > rect { stroke: ${V.errorSecondary}; fill: ${V.errorTertiary}; }
+.tf-dag-phase-blocked .tf-dag-phase-label { fill: ${V.errorSecondary}; }
 @media (prefers-reduced-motion: reduce) {
-  .tf-dag-edge-flow, .tf-dag-node-in-progress > rect { animation: none; }
+  .tf-dag-edge-flow, .tf-dag-node-in-progress > rect, .tf-dag-phase-in-progress > rect { animation: none; }
 }
 
 .tf-verdict { font-size: 11px; font-weight: 600; line-height: 18px; padding: 0 8px; border-radius: 999px; white-space: nowrap; }

@@ -376,6 +376,55 @@ export function truncateForDag(text: string, maxUnits: number): string {
   return `${out}…`
 }
 
+// —— DAG 流程图：任务生命周期相位（拆解 → 子任务 → 终检 → 终批） ——
+
+export type DagPhaseId = 'decompose' | 'finalcheck' | 'accept'
+
+export interface DagPhase {
+  id: DagPhaseId
+  label: string
+  /** 复用子任务状态词汇（pending/in-progress/review/done/blocked），直接接节点色语言。 */
+  status: Subtask['status']
+  /** 节点第二行说明（相位当前口径）。 */
+  line: string
+}
+
+/**
+ * 任务管线的三个相位节点状态（纯投影）：
+ * - AI 拆解：decomposing = 运行中；跑过拆解会话（或有子任务）= 完成；否则待开始。
+ * - AI 终检：finalizeSessionId = 运行中；任务级证据已产出（或任务终态）= 完成；
+ *   否则等待（子任务齐备后自动跑）。
+ * - 人工终批：review = 等人裁决；done/archived = 通过；cancelled = 已取消。
+ */
+export function dagPhases(task: Task): DagPhase[] {
+  const terminal = task.status === 'done' || task.status === 'archived'
+  const decompose: DagPhase =
+    task.status === 'decomposing'
+      ? { id: 'decompose', label: 'AI 拆解', status: 'in-progress', line: '拆解会话运行中' }
+      : task.decomposeSessionIds.length > 0 || task.subtasks.length > 0
+        ? { id: 'decompose', label: 'AI 拆解', status: 'done', line: '拆解完成' }
+        : { id: 'decompose', label: 'AI 拆解', status: 'pending', line: task.status === 'draft' ? '待开始拆解' : '未拆解' }
+  const finalcheck: DagPhase =
+    task.finalizeSessionId !== undefined
+      ? { id: 'finalcheck', label: 'AI 终检', status: 'in-progress', line: '终检会话运行中' }
+      : task.evidence !== undefined
+        ? { id: 'finalcheck', label: 'AI 终检', status: 'done', line: '任务级证据已产出' }
+        : terminal
+          ? { id: 'finalcheck', label: 'AI 终检', status: 'done', line: '已随验收通过' }
+          : task.status === 'cancelled'
+            ? { id: 'finalcheck', label: 'AI 终检', status: 'blocked', line: '任务已取消' }
+            : { id: 'finalcheck', label: 'AI 终检', status: 'pending', line: '子任务齐备后自动跑' }
+  const accept: DagPhase =
+    task.status === 'review'
+      ? { id: 'accept', label: '人工终批', status: 'review', line: '等待人工终批' }
+      : terminal
+        ? { id: 'accept', label: '人工终批', status: 'done', line: '验收通过' }
+        : task.status === 'cancelled'
+          ? { id: 'accept', label: '人工终批', status: 'blocked', line: '任务已取消' }
+          : { id: 'accept', label: '人工终批', status: 'pending', line: '对照合同验收标准' }
+  return [decompose, finalcheck, accept]
+}
+
 /** 距现在的相对时间。 */
 export function relativeTime(at: number, now = Date.now()): string {
   const delta = Math.max(0, now - at)
