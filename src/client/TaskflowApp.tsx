@@ -578,11 +578,11 @@ function decodeModelChoice(choice: string): { provider: string; model: string } 
   const separator = choice.indexOf('::')
   return { provider: choice.slice(0, separator), model: choice.slice(separator + 2) }
 }
+// 档位须落在协议白名单 [1,99] 内（validateMaxRounds，防失控开关口径）——超出即 ActionFormatError，创建直接失败。
 const ROUND_CHOICES: Array<{ value: number | null; label: string }> = [
   { value: 30, label: '30' },
   { value: 60, label: '60' },
-  { value: 100, label: '100' },
-  { value: 150, label: '150' },
+  { value: 90, label: '90' },
   { value: null, label: '无限' },
 ]
 
