@@ -1345,6 +1345,8 @@ const DAG_PAD = 14
 const DAG_SLOTS_PER_BAND = 4
 /** 折行之间的纵向间隔（px）。 */
 const DAG_BAND_GAP_Y = 56
+/** 画布右/左缘弧线余量（px）：行末折返连线在边缘向外鼓出（≤~24px + 箭头），不裁切。 */
+const DAG_ARC_MARGIN = 32
 
 /**
  * 蛇形布局几何（2026-09-22）：槽位序列从真实数据推导——拆解(0) + 子任务依赖分层
@@ -1356,8 +1358,8 @@ function dagGeometry(rows: number, totalLayers: number) {
   const bandBlock = rows * DAG_NODE_H + Math.max(0, rows - 1) * DAG_GAP_Y
   const bands = Math.max(1, Math.ceil(totalLayers / DAG_SLOTS_PER_BAND))
   return {
-    /** 恒定宽度：不随任务大小变化（切换卡片零跳动）。 */
-    width: DAG_PAD * 2 + DAG_SLOTS_PER_BAND * DAG_NODE_W + (DAG_SLOTS_PER_BAND - 1) * DAG_GAP_X,
+    /** 恒定宽度：不随任务大小变化（切换卡片零跳动）；两侧留弧线余量防裁切。 */
+    width: DAG_PAD * 2 + DAG_ARC_MARGIN * 2 + DAG_SLOTS_PER_BAND * DAG_NODE_W + (DAG_SLOTS_PER_BAND - 1) * DAG_GAP_X,
     height: DAG_PAD * 2 + bands * bandBlock + (bands - 1) * DAG_BAND_GAP_Y,
     /** 槽位 → 画布坐标（index = 层内第几个节点）。 */
     pos: (slot: number, index: number): { x: number; y: number } => {
@@ -1365,21 +1367,63 @@ function dagGeometry(rows: number, totalLayers: number) {
       const local = slot % DAG_SLOTS_PER_BAND
       const visual = band % 2 === 0 ? local : DAG_SLOTS_PER_BAND - 1 - local
       return {
-        x: DAG_PAD + visual * (DAG_NODE_W + DAG_GAP_X),
+        x: DAG_PAD + DAG_ARC_MARGIN + visual * (DAG_NODE_W + DAG_GAP_X),
         y: DAG_PAD + band * (bandBlock + DAG_BAND_GAP_Y) + index * (DAG_NODE_H + DAG_GAP_Y),
       }
     },
   }
 }
 
-/** 边路径：同向（右→左出发）走贝塞尔；折行折返（目标在源左侧同列）走竖直 S 弧。 */
-function dagEdgePath(x1: number, y1: number, x2: number, y2: number): string {
-  if (x2 < x1) {
-    const my = (y1 + y2) / 2
-    return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
-  }
-  const dx = Math.max(20, (x2 - x1) / 2)
-  return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
+/** 边路径：出口/入口侧独立指定（1 = 卡片右侧，-1 = 左侧）。出口侧跟随源所在行的
+ *  行进方向（左→右行出右边、右→左行出左边），入口侧跟随目标所在行方向——
+ *  行内连线是干净的短弧，行末折返在边缘外鼓一个小弧再回来。 */
+function dagEdgePath(x1: number, y1: number, x2: number, y2: number, exitRight: boolean, entryRight: boolean): string {
+  const sx = exitRight ? 1 : -1
+  const ex = entryRight ? 1 : -1
+  const dx = Math.max(24, Math.abs(x2 - x1) / 2)
+  return `M ${x1} ${y1} C ${x1 + sx * dx} ${y1}, ${x2 + ex * dx} ${y2}, ${x2} ${y2}`
+}
+
+/** 槽位所在行的行进方向：奇数行右→左（入口/出口都在左边），偶数行左→右（在右边）。 */
+function dagEntryRight(slot: number): boolean {
+  return Math.floor(slot / DAG_SLOTS_PER_BAND) % 2 === 1
+}
+
+/** 出口侧 = 源所在行的行进方向（与入口同规则）。 */
+function dagExitRight(slot: number): boolean {
+  return !dagEntryRight(slot)
+}
+
+/** 连线箭头：随边状态着色（默认灰 / 完成绿 / 运行中蓝）；孤儿 dep 桩不挂箭头。 */
+function markerFor(edgeClass: string): string {
+  if (edgeClass.includes('done')) return 'url(#tf-dag-arrow-done)'
+  if (edgeClass.includes('flow')) return 'url(#tf-dag-arrow-flow)'
+  return 'url(#tf-dag-arrow)'
+}
+
+/** 箭头 marker 定义（三种状态色；orient=auto 随路径末端切线方向旋转）。 */
+function DagArrowDefs(): JSX.Element {
+  const arrow = (id: string, fillClass: string): JSX.Element => (
+    <marker
+      key={id}
+      id={id}
+      viewBox="0 0 10 10"
+      refX="9"
+      refY="5"
+      markerWidth="6.5"
+      markerHeight="6.5"
+      orient="auto-start-reverse"
+    >
+      <path d="M 0 0 L 10 5 L 0 10 z" className={fillClass} />
+    </marker>
+  )
+  return (
+    <defs>
+      {arrow('tf-dag-arrow', 'tf-dag-arrow-default')}
+      {arrow('tf-dag-arrow-done', 'tf-dag-arrow-done')}
+      {arrow('tf-dag-arrow-flow', 'tf-dag-arrow-flow')}
+    </defs>
+  )
 }
 
 /** 流程图节点选中态：点子任务卡或相位药丸 → 下方展开该节点的执行轨迹。 */
@@ -1433,46 +1477,53 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
           role="img"
           aria-label={`任务执行流程图：拆解、${task.subtasks.length} 个子任务、终检、人工终批`}
         >
+          <DagArrowDefs />
           {(() => {
             // —— 相位连线：拆解 → 根（无根时直连终检）；叶子 → 终检 → 终批 ——
-            const edgeTo = (x1: number, y1: number, x2: number, y2: number, cls: string, key: string, title: string) => {
+            // 出口侧 = 源槽位行方向；入口侧 = 目标槽位行方向。
+            const exitX = (box: { x: number }, exitRight: boolean): number => (exitRight ? box.x + DAG_NODE_W : box.x)
+            const edgeTo = (fromBox: { x: number; y: number }, fromSlot: number, toBox: { x: number; y: number }, toSlot: number, cls: string, key: string, title: string) => {
+              const exitRight = dagExitRight(fromSlot)
+              const entryRight = dagEntryRight(toSlot)
               return (
-                <path key={key} className={`tf-dag-edge ${cls}`} d={dagEdgePath(x1, y1, x2, y2)}>
+                <path
+                  key={key}
+                  className={`tf-dag-edge ${cls}`}
+                  d={dagEdgePath(
+                    exitX(fromBox, exitRight), fromBox.y + DAG_NODE_H / 2,
+                    entryX(toBox, entryRight), toBox.y + DAG_NODE_H / 2,
+                    exitRight, entryRight,
+                  )}
+                  markerEnd={markerFor(cls)}
+                >
                   <title>{title}</title>
                 </path>
               )
             }
+            const entryX = (box: { x: number }, entryRight: boolean): number => (entryRight ? box.x + DAG_NODE_W : box.x)
             const decomposeDone = phaseById.get('decompose')?.status === 'done'
             const phaseEdgeClass = decomposeDone ? 'tf-dag-edge-done' : ''
+            const finalcheckSlot = layout.layerCount + 1
+            const acceptSlot = layout.layerCount + 2
             const headEdges = roots.length > 0
-              ? roots.map(root => {
-                  const to = dagNodePos(root)
-                  return edgeTo(
-                    decomposeBox.x + DAG_NODE_W, decomposeBox.y + DAG_NODE_H / 2,
-                    to.x, to.y + DAG_NODE_H / 2,
-                    phaseEdgeClass, `phase-head-${root.sub.id}`,
-                    `拆解完成 → ${root.sub.title}`,
-                  )
-                })
+              ? roots.map(root => edgeTo(
+                  decomposeBox, 0, dagNodePos(root), root.layer + 1,
+                  phaseEdgeClass, `phase-head-${root.sub.id}`,
+                  `拆解完成 → ${root.sub.title}`,
+                ))
               : [edgeTo(
-                  decomposeBox.x + DAG_NODE_W, decomposeBox.y + DAG_NODE_H / 2,
-                  finalcheckBox.x, finalcheckBox.y + DAG_NODE_H / 2,
+                  decomposeBox, 0, finalcheckBox, finalcheckSlot,
                   phaseEdgeClass, 'phase-head-direct',
                   task.subtasks.length === 0 ? '拆解 → 终检（无子任务形态）' : '拆解 → 终检',
                 )]
-            const tailEdges = leaves.map(leaf => {
-              const from = dagNodePos(leaf)
-              return edgeTo(
-                from.x + DAG_NODE_W, from.y + DAG_NODE_H / 2,
-                finalcheckBox.x, finalcheckBox.y + DAG_NODE_H / 2,
-                finalcheckRunning ? 'tf-dag-edge-flow' : leaf.sub.status === 'done' ? 'tf-dag-edge-done' : '',
-                `phase-tail-${leaf.sub.id}`,
-                `${leaf.sub.title} → 终检`,
-              )
-            })
+            const tailEdges = leaves.map(leaf => edgeTo(
+              dagNodePos(leaf), leaf.layer + 1, finalcheckBox, finalcheckSlot,
+              finalcheckRunning ? 'tf-dag-edge-flow' : leaf.sub.status === 'done' ? 'tf-dag-edge-done' : '',
+              `phase-tail-${leaf.sub.id}`,
+              `${leaf.sub.title} → 终检`,
+            ))
             const acceptEdge = edgeTo(
-              finalcheckBox.x + DAG_NODE_W, finalcheckBox.y + DAG_NODE_H / 2,
-              acceptBox.x, acceptBox.y + DAG_NODE_H / 2,
+              finalcheckBox, finalcheckSlot, acceptBox, acceptSlot,
               phaseById.get('accept')?.status === 'done' ? 'tf-dag-edge-done' : '',
               'phase-accept',
               '终检 → 人工终批',
@@ -1484,12 +1535,16 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
             if (target === undefined) return null
             const to = dagNodePos(target)
             if (edge.missing) {
-              // 孤儿 dep：指向的依赖不存在，目标左侧画一小段红虚线桩提示数据异常
+              // 孤儿 dep：在目标的入口侧画一小段红虚线桩提示数据异常（跟随行方向）
+              const entryRight = dagEntryRight(target.layer + 1)
+              const y = to.y + DAG_NODE_H / 2
               return (
                 <path
                   key={`edge-${i}`}
                   className="tf-dag-edge tf-dag-edge-missing"
-                  d={`M ${to.x - DAG_GAP_X / 2} ${to.y + DAG_NODE_H / 2} L ${to.x - 6} ${to.y + DAG_NODE_H / 2}`}
+                  d={entryRight
+                    ? `M ${to.x + DAG_NODE_W + DAG_GAP_X / 2} ${y} L ${to.x + DAG_NODE_W + 6} ${y}`
+                    : `M ${to.x - DAG_GAP_X / 2} ${y} L ${to.x - 6} ${y}`}
                 >
                   <title>{`未知依赖 ${edge.from}（dep 指向的子任务不存在）`}</title>
                 </path>
@@ -1498,9 +1553,11 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
             const source = nodeById.get(edge.from)
             if (source === undefined) return null
             const from = dagNodePos(source)
-            const x1 = from.x + DAG_NODE_W
+            const exitRight = dagExitRight(source.layer + 1)
+            const entryRight = dagEntryRight(target.layer + 1)
+            const x1 = exitRight ? from.x + DAG_NODE_W : from.x
             const y1 = from.y + DAG_NODE_H / 2
-            const x2 = to.x
+            const x2 = entryRight ? to.x + DAG_NODE_W : to.x
             const y2 = to.y + DAG_NODE_H / 2
             const edgeClass =
               source.sub.status === 'done' ? 'tf-dag-edge-done'
@@ -1510,7 +1567,8 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
               <path
                 key={`edge-${i}`}
                 className={`tf-dag-edge ${edgeClass}`}
-                d={dagEdgePath(x1, y1, x2, y2)}
+                d={dagEdgePath(x1, y1, x2, y2, exitRight, entryRight)}
+                markerEnd={markerFor(edgeClass)}
               >
                 <title>{`${source.sub.title} → ${target.sub.title}`}</title>
               </path>

@@ -354,6 +354,10 @@ export const TASKFLOW_CSS = `
 .tf-dag-edge-done { stroke: ${V.inkGreen}; opacity: 0.55; }
 .tf-dag-edge-flow { stroke: ${V.business}; stroke-width: 1.8; stroke-dasharray: 6 5; animation: tf-dag-dash 1.1s linear infinite; }
 .tf-dag-edge-missing { stroke: ${V.errorSecondary}; stroke-dasharray: 3 4; opacity: 0.75; }
+/* 连线方向箭头（marker 填充随边状态着色） */
+.tf-dag-arrow-default { fill: ${V.borderL2}; }
+.tf-dag-arrow-done { fill: ${V.inkGreen}; }
+.tf-dag-arrow-flow { fill: ${V.business}; }
 @keyframes tf-dag-dash { to { stroke-dashoffset: -11; } }
 .tf-dag-node > rect { fill: ${V.bgBase}; stroke: ${V.borderL2}; stroke-width: 1.4; }
 .tf-dag-node > circle { fill: ${V.label3}; }
