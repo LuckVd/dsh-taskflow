@@ -58,6 +58,8 @@ export class DshSessionAdapter implements SessionAdapter {
   private readonly services: AdapterServices
   /** 运行中会话的存活跟踪（sessionId → session），供 elevateSession 原地提权。 */
   private readonly liveSessions = new Map<string, unknown>()
+  /** 运行中执行会话的审批应答登记（sessionId → 模式 + 审批桥），根 ctx 应答器按此过滤。 */
+  private readonly approvalSessions = new Map<string, { mode: ExecutionSessionInput['executionMode']; approvals: ExecutionSessionInput['approvals'] }>()
 
   constructor(private readonly options: DshAdapterOptions) {
     const ctx = options.ctx as unknown as Record<string, unknown>
@@ -66,6 +68,27 @@ export class DshSessionAdapter implements SessionAdapter {
       sessionPersistence: ctx['sessionPersistence'] as AdapterServices['sessionPersistence'],
       permissionPresets: ctx['permissionPresets'] as AdapterServices['permissionPresets'] | undefined,
       agentPresets: ctx['agentPresets'] as AdapterServices['agentPresets'] | undefined,
+    }
+    // §7.1b 修复（2026-09-22 真机事故）：应答器同时挂插件根 ctx（dsh-acp 同款形态）。
+    // 仅挂 agent setup ctx 时，沙箱提权的 approval/request waterfall 在当前宿主上
+    // 到不了 agent 作用域监听器——完全权限任务的提权请求无人应答，会话静默挂死
+    // （看板无感知，看门狗 30 分钟后误判「静默超时」击杀）。根 ctx 全局监听 +
+    // 会话所有权过滤：auto 秒放行；approval 走引擎审批桥（落库 + 看板裁决）。
+    const on = (ctx['on'] as ((event: string, listener: (...args: never[]) => unknown) => () => void) | undefined)?.bind(options.ctx)
+    if (typeof on === 'function') {
+      void on('approval/request', ((
+        request: { agent?: { session?: { id?: string } }; toolName?: string; reason?: string },
+        next: () => Promise<string>,
+      ) => {
+        const sid = request.agent?.session?.id
+        const entry = sid !== undefined ? this.approvalSessions.get(sid) : undefined
+        if (sid === undefined || entry === undefined) return next()
+        if (entry.mode === 'auto') return 'allowed-once'
+        return entry.approvals
+          .request({ sessionId: sid, toolName: request.toolName ?? 'unknown-tool', reason: request.reason })
+          .then(decision => (decision === 'allowed' ? 'allowed-once' : 'rejected'))
+          .catch(() => 'rejected')
+      }) as (...args: never[]) => unknown)
     }
   }
 
@@ -122,6 +145,7 @@ export class DshSessionAdapter implements SessionAdapter {
     try {
       const handle = await this.createAgent(input, input.tools)
       this.liveSessions.set(input.sessionId, handle.agent.session)
+      this.approvalSessions.set(input.sessionId, { mode: input.executionMode, approvals: input.approvals })
       try {
         await handle.agent.whenIdle().catch(() => undefined)
         handle.agent.followup(this.buildMessage(input.prompt))
@@ -129,6 +153,7 @@ export class DshSessionAdapter implements SessionAdapter {
         return { kind: 'completed' }
       } finally {
         this.liveSessions.delete(input.sessionId)
+        this.approvalSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
       }
     } catch (error) {
@@ -154,16 +179,21 @@ export class DshSessionAdapter implements SessionAdapter {
             }
           }
           if (selection !== undefined) installModelSelection(agentCtx, selection)
+          // 接管同样应用权限口径（auto + 未钉工作区 = 全权限；钉了工作区保持
+          // workspace-write，提权经应答器即时放行——与 createAgent 一致）。
+          this.applyPermissionPreset(agentCtx, input)
           registerTaskflowTools(agentCtx, input.tools, input.sessionId)
           registerApprovalAnswerer(agentCtx, input)
         },
       } as unknown as Parameters<AdapterServices['agents']['resume']>[0])
       this.liveSessions.set(input.sessionId, handle.agent.session)
+      this.approvalSessions.set(input.sessionId, { mode: input.executionMode, approvals: input.approvals })
       try {
         await handle.agent.whenIdle()
         return { kind: 'completed' }
       } finally {
         this.liveSessions.delete(input.sessionId)
+        this.approvalSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
       }
     } catch (error) {
@@ -189,6 +219,18 @@ export class DshSessionAdapter implements SessionAdapter {
   }
 
   // —— 内部 ——
+
+  /** 接管（resume）路径的权限应用：resume 不重发 agent/created，从 agentCtx 直取会话。 */
+  private applyPermissionPreset(agentCtx: Context, input: DecomposeSessionInput | ExecutionSessionInput): void {
+    const presets = this.services.permissionPresets
+    if (presets === undefined) return
+    try {
+      const session = (agentCtx as unknown as { agent?: { session?: unknown } }).agent?.session
+      if (session !== undefined) presets.set(session, effectiveSessionPermission(input))
+    } catch {
+      // 接管时预设不可用：会话保持原权限，应答器仍兜底（auto 放行 / approval 进桥）
+    }
+  }
 
   private buildMessage(prompt: string): unknown {
     return createUserMessage({
@@ -241,11 +283,15 @@ export class DshSessionAdapter implements SessionAdapter {
         if (selection !== undefined) installModelSelection(agentCtx, selection)
         // 权限应用：agent/created 在 setup 完成后、发布时触发（schedule 插件同款时序）。
         // 应用任务声明的权限预设（§7.2 pins fail-closed）；未知预设名保持创建时形态。
+        // §7.1b 修复（2026-09-22）：完全权限 + 未钉工作区 → danger-full-access，
+        // 从根上消掉逐次提权询问（真机事故：提权审批无人应答 → 会话静默挂死）；
+        // 钉了工作区保持 workspace-write——硬约束不因「完全权限」失效，提权改经
+        // 应答器即时放行（逐次留痕）。
         const presets = this.services.permissionPresets
         if (presets !== undefined) {
           const stop = agentCtx.on('agent/created', ({ agent }: { agent: { session: unknown } }) => {
             try {
-              presets.set(agent.session, input.permission)
+              presets.set(agent.session, effectiveSessionPermission(input))
             } catch {
               // 未知预设名：保持创建时权限（引擎的权限确认门已兜底）
             }
@@ -267,6 +313,13 @@ function isDirectory(path: string): boolean {
   } catch {
     return false
   }
+}
+
+/** 会话的生效权限预设：完全权限 + 未钉工作区 → 全权限（消除逐次提权询问，
+ *  2026-09-22 真机事故修复）；其余（approval 模式 / 钉了工作区）用任务声明值。 */
+function effectiveSessionPermission(input: DecomposeSessionInput | ExecutionSessionInput): string {
+  if (isExecutionInput(input) && input.executionMode === 'auto' && input.workspace.trim() === '') return 'danger-full-access'
+  return input.permission
 }
 
 /** 取最后一条 assistant 文本的拼接（rc.1 事件形如 {type, data}，data 承载负载；兼容扁平形态）。 */

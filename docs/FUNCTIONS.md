@@ -507,6 +507,7 @@ archiveTask         retryBlocked                    raiseMaxRounds
 4. **证据边界**：证据输出截断（8KiB/条）防 ledger 暴涨；selfCheck 与 acceptance 等长校验防跳条。
 5. **存储**：ledger 0600；损坏文件移 `ledger.json.corrupt-*` 保留原始字节，Host 以空 ledger + 显式错误启动，绝不静默清空。
 6. **交付物预览（§7.4b，2026-09-11 补）**：`artifact/preview` 是**ledger 白名单只读口**——只放行该任务证据 artifacts 声明过的路径（精确字符串匹配），未声明路径一律 404，不是任意文件读取口；只读（open(r)/stat，从不写）；单次 ≤256KiB 截断；头部含 NUL 判二进制拒显；渲染走 React 转义（无 HTML 注入面），链接仅放行 http/https/#。同源信任围栏沿 §6 形态（loopback/受信主机 + 同源 Origin）。已知边界：声明→预览之间的 TOCTOU 与符号链接替换不设防——验收人手动触发、单用户本机、同权限运行，风险可接受。
+7. **提权审批应答（§7.1b，2026-09-22 真机事故修复）**：沙箱提权（写工作区外等）走宿主 `approval/request` waterfall。事故形态：仅挂 agent setup ctx 的应答器在当前宿主上收不到派发——完全权限（auto）任务的提权请求无人应答，会话**静默挂死**（审批不落账本、GUI 不弹、看板无感知），30 分钟后被看门狗误判「静默超时」击杀。修复双保险：① 应答器同时挂**插件根 ctx**（dsh-acp 同款形态）+ 运行中会话所有权表过滤（auto 秒放行 / approval 进引擎审批桥落库看板）；② **auto + 未钉工作区的会话直接以 `danger-full-access` 预设创建**（create 与 adopt 两路）——提权询问从根上消失，「完全权限」名副其实；**钉了工作区**的任务保持 workspace-write（FR-21 硬约束不因完全权限失效），提权改经应答器即时放行、逐次留痕。
 
 ---
 
