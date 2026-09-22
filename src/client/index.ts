@@ -325,6 +325,43 @@ function installFloatingEntry(toggle: () => void): () => void {
 }
 
 /**
+ * 同会话点击也能退出看板（2026-09-23 真机反馈修复）：看板打开期间，用户
+ * 点侧栏里**当前已激活**的原生会话，宿主 sessions.list 的 current 不变
+ * （宿主视为 no-op），watchSessionSwitch 的「current 变化才退出」永远不会
+ * 触发——看板层继续盖住原会话，表现为「点不回去」。
+ *
+ * 修法：捕获阶段监听文档 click，看板开着且点击落在侧栏列内即被动关闭
+ * 看板——只退视图，不 stopPropagation、不 preventDefault，宿主自己的
+ * 会话选中逻辑照常执行（含切到别的会话，那条路径仍由 feed 兜底）。
+ *
+ * 性能：两个文档级监听器常驻，但看板关着时首行布尔短路返回；命中判断
+ * 是一次 contains()（O(祖先深度)）。无轮询、无新增 observer、无重排。
+ * Esc 兜底关闭走同一开合路径。
+ */
+function installSidebarClickExit(): () => void {
+  const onClick = (ev: MouseEvent): void => {
+    if (!boardOpen) return
+    const target = ev.target
+    if (!(target instanceof Node)) return
+    // 入口按钮自身也在侧栏列内：它的「返回会话」toggle 走自己的 click
+    // 处理器，这里跳过，否则捕获阶段先关闭、target 阶段又 toggle 重开
+    if (entryButton !== null && entryButton.contains(target)) return
+    const sidebar = sidebarColumn !== null && sidebarColumn.isConnected ? sidebarColumn : null
+    if (sidebar === null || !sidebar.contains(target)) return
+    setBoardOpen(false)
+  }
+  const onKeyDown = (ev: KeyboardEvent): void => {
+    if (boardOpen && ev.key === 'Escape') setBoardOpen(false)
+  }
+  document.addEventListener('click', onClick, { capture: true, passive: true })
+  document.addEventListener('keydown', onKeyDown, true)
+  return () => {
+    document.removeEventListener('click', onClick, true)
+    document.removeEventListener('keydown', onKeyDown, true)
+  }
+}
+
+/**
  * 会话切换自动退出看板（宿主核心行为，与具体插件无关）：订阅宿主
  * sessions.list feed，current 变化（切到别的会话 / 会话关闭）即被动关闭
  * 看板——只退出视图，绝不拦截切换本身；回调里零 cordis 调用。
@@ -369,7 +406,9 @@ export function clientApply(ctx: MinimalClientContext): void {
     setBoardOpen(true)
   })
   const disposeSessionWatch = watchSessionSwitch(ctx)
+  const disposeClickExit = installSidebarClickExit()
   ctx.effect?.(() => () => disposeSessionWatch(), 'taskflow.session-watch')
+  ctx.effect?.(() => () => disposeClickExit(), 'taskflow.sidebar-click-exit')
   ctx.effect?.(() => {
     return () => {
       cleanupEntry()

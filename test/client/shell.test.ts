@@ -85,4 +85,45 @@ describe('宿主壳层集成面（会话切换 + 降级）', () => {
     expect(entry!.classList.contains('nav-item-test')).toBe(true)
     expect(entry!.textContent).toContain('任务看板')
   })
+
+  it('看板打开时点侧栏会话项（含同会话）关闭看板；点中栏不关；Esc 关（2026-09-23）', () => {
+    buildShell()
+    // jsdom 无布局：给侧栏列一个可被 findSidebarColumn 命中的矩形
+    const side = document.querySelector('.side') as HTMLElement
+    side.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 280, bottom: 900, width: 280, height: 900, x: 0, y: 0, toJSON: () => side.getBoundingClientRect() }) as DOMRect
+    const { ctx, effects } = fakeEffectCollector()
+    clientApply({ ...ctx } as unknown as MinimalClientContext)
+    const entry = document.querySelector('.tf-side-entry') as HTMLButtonElement
+
+    // 打开看板
+    entry.click()
+    expect(document.querySelector('.tf-center-layer')).toBeTruthy()
+    expect(entry.getAttribute('aria-pressed')).toBe('true')
+    // 入口自身再点（「返回会话」）：仍能关闭（捕获排除自身，不与 toggle 打架）
+    entry.click()
+    expect(document.querySelector('.tf-center-layer')).toBeNull()
+
+    // 复现真机场景：开会板后点侧栏里的**当前会话**（current 不变，feed 不触发）
+    entry.click()
+    const sessionItem = document.createElement('button')
+    sessionItem.textContent = '会话 A'
+    side.appendChild(sessionItem)
+    sessionItem.click()
+    expect(document.querySelector('.tf-center-layer')).toBeNull()
+    expect(entry.getAttribute('aria-pressed')).toBe('false')
+
+    // 点中栏（非侧栏）不关
+    entry.click()
+    document.querySelector('.center')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(document.querySelector('.tf-center-layer')).toBeTruthy()
+
+    // Esc 兜底关闭
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(document.querySelector('.tf-center-layer')).toBeNull()
+
+    // 卸载：各清理器（含 click-exit 监听器摘除）执行不抛错
+    entry.click()
+    expect(() => { for (const dispose of effects) dispose() }).not.toThrow()
+  })
 })
