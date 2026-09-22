@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>合同 tab 配色方案预览 · 现状 / A / B / C</title>
+<style>
+  :root {
+    --bg-base: #f6f8fa; --bg-layer-2: #eff2f5;
+    --border-l1: #d8dee4; --border-l2: #c7ced6; --border-l3: #afb8c1;
+    --label-1: #1f2328; --label-2: #59636e; --label-3: #8c959f;
+    --business: #1f6feb; --warn: #9a6700; --success: #1a7f37; --error: #cf222e;
+    --warn-t: rgba(154,103,0,0.10); --biz-t: rgba(31,111,235,0.10); --ok-t: rgba(26,127,55,0.10);
+    --code-font: ui-monospace, SFMono-Regular, Menlo, monospace;
+    --shadow1: 0 1px 4px rgba(31,35,40,0.10);
+  }
+  body { margin: 0; background: #e8ebee; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  .stage { display: flex; justify-content: center; padding: 32px 16px 48px; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .frame { width: 500px; background: var(--bg-base); border: 1px solid var(--border-l2); border-radius: 14px; box-shadow: 0 8px 28px rgba(31,35,40,0.2); overflow: hidden; }
+  .frame h2 { font-size: 12.5px; color: var(--label-2); font-weight: 700; margin: 0; padding: 10px 20px; border-bottom: 1px dashed var(--border-l1); }
+  .frame h2 small { font-weight: 500; color: var(--label-3); margin-left: 6px; }
+  .modal-title { font-size: 14px; font-weight: 700; padding: 12px 20px 0; }
+  .body { padding: 12px 20px 20px; display: flex; flex-direction: column; gap: 12px; }
+
+  .card { background: #fff; border: 1px solid var(--border-l1); border-radius: 12px; box-shadow: var(--shadow1); padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .card-tag { display: flex; align-items: center; gap: 8px; }
+  .card-tag .name { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; color: var(--label-2); }
+  .card-tag .line { flex: 1; height: 1px; background: var(--border-l1); }
+  .goal { font-size: 14.5px; font-weight: 600; line-height: 1.55; color: var(--label-1); }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--bg-layer-2); color: var(--label-2); }
+  .chip.blue { background: var(--biz-t); color: var(--business); }
+  .chip.amber { background: var(--warn-t); color: var(--warn); }
+  .chip.amber i { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .ac-row { display: flex; align-items: baseline; gap: 10px; padding: 8px 2px 8px 0; border-top: 1px solid var(--border-l1); font-size: 13px; line-height: 1.5; }
+  .ac-row:first-of-type { border-top: none; padding-top: 1px; }
+  .ac-badge { flex: none; font-family: var(--code-font); font-size: 10.5px; font-weight: 700; line-height: 18px; padding: 0 7px; border-radius: 999px; background: var(--biz-t); color: var(--business); }
+  .mono { font-family: var(--code-font); font-size: 11.5px; background: var(--bg-layer-2); border-radius: 6px; padding: 2px 8px; }
+  .terms { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .term { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--label-2); }
+  .term .k { color: var(--label-3); }
+  .num b { font-weight: 700; color: var(--label-1); }
+  .num small { font-weight: 500; opacity: 0.75; }
+
+  /* ===== A：语义色条 ===== */
+  .a .card { border-left-width: 3px; }
+  .a .card.goal-card { border-left-color: var(--business); }
+  .a .card.ac-card { border-left-color: var(--success); }
+  .a .card.term-card { border-left-color: var(--border-l3); }
+
+  /* ===== B：卡面色阶 ===== */
+  .b .card.goal-card { background: linear-gradient(90deg, var(--biz-t), rgba(31,111,235,0.03) 55%, #fff); border-color: rgba(31,111,235,0.35); }
+  .b .card.goal-card .name { color: var(--business); }
+  .b .card.term-card { background: var(--bg-layer-2); border: none; box-shadow: none; }
+  .b .card.term-card .line { background: var(--border-l2); }
+
+  /* ===== C：卡头彩点 ===== */
+  .c .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .c .goal-card .dot { background: var(--business); }
+  .c .goal-card .name { color: var(--label-1); }
+  .c .ac-card .dot { background: var(--success); }
+  .c .ac-card .name { color: var(--label-1); }
+  .c .term-card .dot { background: var(--border-l3); }
+  .c .goal-card .line { background: rgba(31,111,235,0.25); }
+  .c .ac-card .line { background: rgba(26,127,55,0.25); }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- 现状 -->
+  <div class="frame">
+    <h2>现状<small>三卡同色，糊成一片</small></h2>
+    <div class="modal-title">修复看板批量归档在筛选态下漏更新计数</div>
+    <div class="body">
+      <div class="card">
+        <div class="card-tag"><span class="name">目标</span><span class="line"></span><span class="chip amber"><i></i>执行权限待确认</span></div>
+        <div class="goal">看板顶部的任务计数徽标在筛选后仍显示全量数字，修复为跟随当前筛选。</div>
+      </div>
+      <div class="card">
+        <div class="card-tag"><span class="name">验收标准</span><span class="line"></span><span class="term"><span class="k">来源</span>AI 细化</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-1</span><span>筛选后徽标数字与列内卡片数一致</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-2</span><span>清空筛选后计数恢复全量</span></div>
+      </div>
+      <div class="card">
+        <div class="card-tag"><span class="name">条款</span><span class="line"></span></div>
+        <div class="terms">
+          <span class="term"><span class="k">权限</span><span class="chip blue">完全权限</span></span>
+          <span class="term"><span class="k">迭代</span><span class="chip num"><b>2</b><small> / 不限 轮</small></span></span>
+          <span class="term"><span class="k">工作目录</span><span class="mono">/opt/pro/dsh-taskflow</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- A -->
+  <div class="frame a">
+    <h2>方案 A<small>语义色条区分（蓝 / 绿 / 灰）</small></h2>
+    <div class="modal-title">修复看板批量归档在筛选态下漏更新计数</div>
+    <div class="body">
+      <div class="card goal-card">
+        <div class="card-tag"><span class="name">目标</span><span class="line"></span><span class="chip amber"><i></i>执行权限待确认</span></div>
+        <div class="goal">看板顶部的任务计数徽标在筛选后仍显示全量数字，修复为跟随当前筛选。</div>
+      </div>
+      <div class="card ac-card">
+        <div class="card-tag"><span class="name">验收标准</span><span class="line"></span><span class="term"><span class="k">来源</span>AI 细化</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-1</span><span>筛选后徽标数字与列内卡片数一致</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-2</span><span>清空筛选后计数恢复全量</span></div>
+      </div>
+      <div class="card term-card">
+        <div class="card-tag"><span class="name">条款</span><span class="line"></span></div>
+        <div class="terms">
+          <span class="term"><span class="k">权限</span><span class="chip blue">完全权限</span></span>
+          <span class="term"><span class="k">迭代</span><span class="chip num"><b>2</b><small> / 不限 轮</small></span></span>
+          <span class="term"><span class="k">工作目录</span><span class="mono">/opt/pro/dsh-taskflow</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- B -->
+  <div class="frame b">
+    <h2>方案 B<small>卡面色阶（蓝洗底 / 白卡 / 灰面）</small></h2>
+    <div class="modal-title">修复看板批量归档在筛选态下漏更新计数</div>
+    <div class="body">
+      <div class="card goal-card">
+        <div class="card-tag"><span class="name">目标</span><span class="line"></span><span class="chip amber"><i></i>执行权限待确认</span></div>
+        <div class="goal">看板顶部的任务计数徽标在筛选后仍显示全量数字，修复为跟随当前筛选。</div>
+      </div>
+      <div class="card ac-card">
+        <div class="card-tag"><span class="name">验收标准</span><span class="line"></span><span class="term"><span class="k">来源</span>AI 细化</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-1</span><span>筛选后徽标数字与列内卡片数一致</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-2</span><span>清空筛选后计数恢复全量</span></div>
+      </div>
+      <div class="card term-card">
+        <div class="card-tag"><span class="name">条款</span><span class="line"></span></div>
+        <div class="terms">
+          <span class="term"><span class="k">权限</span><span class="chip blue">完全权限</span></span>
+          <span class="term"><span class="k">迭代</span><span class="chip num"><b>2</b><small> / 不限 轮</small></span></span>
+          <span class="term"><span class="k">工作目录</span><span class="mono">/opt/pro/dsh-taskflow</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- C -->
+  <div class="frame c">
+    <h2>方案 C<small>卡头彩点（卡体不动）</small></h2>
+    <div class="modal-title">修复看板批量归档在筛选态下漏更新计数</div>
+    <div class="body">
+      <div class="card goal-card">
+        <div class="card-tag"><span class="dot"></span><span class="name">目标</span><span class="line"></span><span class="chip amber"><i></i>执行权限待确认</span></div>
+        <div class="goal">看板顶部的任务计数徽标在筛选后仍显示全量数字，修复为跟随当前筛选。</div>
+      </div>
+      <div class="card ac-card">
+        <div class="card-tag"><span class="dot"></span><span class="name">验收标准</span><span class="line"></span><span class="term"><span class="k">来源</span>AI 细化</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-1</span><span>筛选后徽标数字与列内卡片数一致</span></div>
+        <div class="ac-row"><span class="ac-badge">AC-2</span><span>清空筛选后计数恢复全量</span></div>
+      </div>
+      <div class="card term-card">
+        <div class="card-tag"><span class="dot"></span><span class="name">条款</span><span class="line"></span></div>
+        <div class="terms">
+          <span class="term"><span class="k">权限</span><span class="chip blue">完全权限</span></span>
+          <span class="term"><span class="k">迭代</span><span class="chip num"><b>2</b><small> / 不限 轮</small></span></span>
+          <span class="term"><span class="k">工作目录</span><span class="mono">/opt/pro/dsh-taskflow</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

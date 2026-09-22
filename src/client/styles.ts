@@ -161,6 +161,12 @@ export const TASKFLOW_CSS = `
 .tf-status-tag[data-status='review'] i { background: ${V.business}; }
 .tf-status-tag[data-status='blocked'] i, .tf-status-tag[data-status='rejected'] i { background: ${V.errorSecondary}; }
 .tf-status-tag[data-status='done'] i { background: ${V.inkGreen}; }
+/* 弹窗头部的状态升级为语义底色药丸（2026-09-22）：与标题拉开层级，状态一眼可辨 */
+.tf-modal-head .tf-status-tag { height: 24px; padding: 0 10px; border-radius: 999px; background: ${V.bgLayer2}; color: ${V.label2}; font-weight: 600; flex: none; }
+.tf-modal-head .tf-status-tag[data-status='in-progress'], .tf-modal-head .tf-status-tag[data-status='decomposing'] { background: ${V.warnTertiary}; color: ${V.warnLabel}; }
+.tf-modal-head .tf-status-tag[data-status='review'] { background: ${V.businessTertiary}; color: ${V.business}; }
+.tf-modal-head .tf-status-tag[data-status='blocked'], .tf-modal-head .tf-status-tag[data-status='rejected'] { background: ${V.errorTertiary}; color: ${V.errorSecondary}; }
+.tf-modal-head .tf-status-tag[data-status='done'] { background: ${V.successTertiary}; color: ${V.inkGreen}; }
 .tf-progress { height: 4px; border-radius: 999px; background: ${V.bgLayer2}; overflow: hidden; }
 .tf-progress-bar { display: block; height: 100%; border-radius: 999px; background: ${V.business}; transition: width 240ms ease; }
 .tf-card[data-status='done'] .tf-progress-bar { background: ${V.success}; }
@@ -197,13 +203,21 @@ export const TASKFLOW_CSS = `
 .tf-modal:focus-visible { outline: none; }
 @keyframes tf-pop { from { transform: translateY(10px) scale(0.985); opacity: 0; } }
 .tf-modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 20px 10px; }
-.tf-modal-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-modal-title { font-size: 16px; font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.01em; }
 .tf-modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 16px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
 /* 普通滚动态：子项不参与 flex 压缩（否则内容超高时区块会被压扁而非滚动） */
 .tf-modal-body:not(.tf-modal-body-fill) > * { flex: none; }
 .tf-modal-body-fill { overflow: hidden; }
 .tf-modal-foot { flex: none; border-top: 1px solid ${V.borderL1}; padding: 10px 20px; }
 .tf-modal-foot .tf-actions { padding-top: 0; }
+/* 任务详情弹窗吸底操作条（2026-09-22）：动作靠右；幽灵按钮升级为描边按钮
+   （原无边框纯文字形态在吸底栏里不像可点的按钮），danger 保持红字红描边。 */
+.tf-task-actions { justify-content: flex-end; }
+.tf-task-actions .tf-btn { background: ${V.bgBase}; border: 1px solid ${V.borderL3}; }
+.tf-task-actions .tf-btn:hover:not(:disabled) { border-color: ${V.borderL2}; }
+.tf-task-actions .tf-btn-danger { color: ${V.errorSecondary}; }
+.tf-task-actions .tf-btn-danger:hover:not(:disabled) { background: ${V.bgHoverDanger}; border-color: ${V.errorSecondary}; }
+.tf-task-actions .tf-btn-primary { border-color: ${V.btnInfo}; }
 /* 弹窗底部拖拽手柄：拉高弹窗，多出的高度归 tab 内弹性块（流程 tab = 轨迹面板）。 */
 .tf-modal-resize { flex: none; height: 10px; display: flex; align-items: center; justify-content: center; cursor: ns-resize; touch-action: none; }
 .tf-modal-resize span { width: 64px; height: 4px; border-radius: 999px; background: ${V.borderL1}; transition: background 120ms ease; }
@@ -321,10 +335,11 @@ export const TASKFLOW_CSS = `
 }
 
 /* —— 标签页 —— */
-.tf-tabs { display: flex; gap: 18px; padding: 0 20px; border-bottom: 1px solid ${V.borderL1}; flex: none; }
-.tf-tab { padding: 6px 2px 9px; border-bottom: 2px solid transparent; margin-bottom: -1px; color: ${V.label2}; min-height: 24px; font-size: 13px; transition: color 120ms ease, border-color 120ms ease; }
+/* tab 行（2026-09-22）：分段器（segmented）形态——淡灰槽 + 白色活动块，替换原下划线文本 */
+.tf-tabs { display: inline-flex; gap: 2px; padding: 3px; margin: 10px 20px 14px; background: ${V.bgLayer2}; border-radius: 10px; flex: none; align-self: flex-start; }
+.tf-tab { padding: 5px 14px; border-radius: 8px; color: ${V.label2}; min-height: 24px; font-size: 12.5px; white-space: nowrap; transition: color 120ms ease, background-color 120ms ease, box-shadow 120ms ease; }
 .tf-tab:hover { color: ${V.label}; }
-.tf-tab[aria-selected='true'] { color: ${V.label}; border-bottom-color: ${V.business}; font-weight: 600; }
+.tf-tab[aria-selected='true'] { color: ${V.label}; background: ${V.bgBase}; box-shadow: ${V.shadow1}; font-weight: 600; }
 
 .tf-section { display: flex; flex-direction: column; gap: 8px; }
 .tf-section-title { font-size: 12px; font-weight: 600; color: ${V.label3}; letter-spacing: 0.02em; }
@@ -341,6 +356,39 @@ export const TASKFLOW_CSS = `
 .tf-ac { display: flex; gap: 8px; font-size: 13px; align-items: baseline; }
 .tf-ac-id { font-family: ${V.codeFont}; font-size: 11px; color: ${V.label3}; flex: none; }
 .tf-hint { font-size: 12px; line-height: 1.5; color: ${V.label3}; overflow-wrap: anywhere; }
+
+/* —— 合同 tab（2026-09-22 改版）：白卡三段 = 目标 / 验收标准 / 条款 ——
+ * 卡片语言对齐 tf-judge（白卡 + 发丝线边 + 阴影），head = 小节名 + 弹性横线 + 右侧附注。
+ * 配色（方案A，2026-09-22）：语义色条区分卡片角色——目标蓝（合同主体）/ 验收绿（正向承诺）/ 条款灰（约束附录）。 */
+.tf-ct-card { display: flex; flex-direction: column; gap: 10px; background: ${V.bgBase}; border: 1px solid ${V.borderL1}; border-left-width: 3px; border-radius: 12px; padding: 14px 16px; box-shadow: ${V.shadow1}; }
+.tf-ct-card.tf-ct-goal-card { border-left-color: ${V.business}; }
+.tf-ct-card.tf-ct-ac-card { border-left-color: ${V.success}; }
+.tf-ct-card.tf-ct-term-card { border-left-color: ${V.borderL3}; }
+.tf-ct-head { display: flex; align-items: center; gap: 8px; }
+.tf-ct-name { font-size: 12px; font-weight: 700; letter-spacing: 0.04em; color: ${V.label2}; }
+.tf-ct-rule { flex: 1; height: 1px; background: ${V.borderL1}; }
+.tf-ct-goal { font-size: 15px; font-weight: 600; line-height: 1.55; color: ${V.label}; overflow-wrap: anywhere; }
+.tf-ct-terms { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; }
+.tf-ct-k { color: ${V.label3}; font-size: 12.5px; }
+.tf-ct-v { display: inline-flex; align-items: center; min-width: 0; font-size: 13px; color: ${V.label2}; }
+.tf-ct-v .tf-chip { height: 24px; padding: 0 10px; font-size: 12.5px; }
+.tf-ct-v .tf-ws-path { font-size: 12.5px; padding: 3px 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-chip-blue { background: ${V.businessTertiary}; color: ${V.business}; }
+.tf-chip-amber { background: ${V.warnTertiary}; color: ${V.warnLabel}; font-weight: 600; }
+.tf-chip-amber i { width: 6px; height: 6px; border-radius: 50%; background: ${V.warn}; flex: none; animation: tf-pulse 1.6s ease-in-out infinite; }
+.tf-chip-num { font-variant-numeric: tabular-nums; }
+.tf-chip-num b { font-weight: 700; color: ${V.label}; }
+.tf-chip-num small { font-weight: 500; opacity: 0.75; }
+.tf-ac-row { display: flex; align-items: baseline; gap: 10px; padding: 9px 2px 9px 0; border-top: 1px solid ${V.borderL1}; font-size: 13px; line-height: 1.55; }
+.tf-ac-row:first-of-type { border-top: none; padding-top: 2px; }
+.tf-ac-badge { flex: none; font-family: ${V.codeFont}; font-size: 10.5px; font-weight: 700; line-height: 18px; padding: 0 7px; border-radius: 999px; background: ${V.businessTertiary}; color: ${V.business}; }
+.tf-ct-origin { border-left: 3px solid ${V.borderL2}; padding: 2px 12px; display: flex; flex-direction: column; gap: 6px; }
+.tf-ct-origin-q { font-size: 12.5px; color: ${V.label2}; line-height: 1.55; overflow-wrap: anywhere; }
+.tf-ct-origin-q::before { content: '“'; color: ${V.label3}; }
+.tf-ct-origin-q::after { content: '”'; color: ${V.label3}; }
+@media (prefers-reduced-motion: reduce) {
+  .tf-chip-amber i { animation: none; }
+}
 
 /* —— 流程 tab：DAG 执行流程图（FR-12 可视化）—— */
 /* 状态色语言对齐 StatusDot：执行中琥珀（呼吸）/ 待核验蓝 / 完成绿 / 受阻红 / 等待灰。 */
@@ -486,8 +534,7 @@ export const TASKFLOW_CSS = `
 .tf-dot-red { background: ${V.errorSecondary}; }
 .tf-dot-gray { background: ${V.label3}; }
 
-.tf-session-link { font-family: ${V.codeFont}; font-size: 12px; font-weight: 500; color: ${V.business}; background: none; border: none; padding: 0; cursor: pointer; }
-.tf-session-link:hover { text-decoration: underline; }
+/* 会话 id 不再外显（2026-09-22）：原 .tf-session-link 样式随「点此复制 id」方案退役。 */
 .tf-count-anim { animation: tf-pulse 360ms ease; }
 @keyframes tf-pulse { 50% { transform: scale(1.08); } }
 

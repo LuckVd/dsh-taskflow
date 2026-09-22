@@ -1230,7 +1230,7 @@ function TaskActions({
 }): JSX.Element {
   const [confirming, setConfirming] = useState<'cancel' | null>(null)
   return (
-    <div className="tf-actions">
+    <div className="tf-actions tf-task-actions">
       {task.status === 'draft' && (
         <button type="button" className="tf-btn tf-btn-primary" disabled={busy} onClick={() => void act({ type: 'startDecompose' })}>开始拆解</button>
       )}
@@ -1281,53 +1281,70 @@ function TaskActions({
 
 // —— 各标签页 ——
 
+// 合同 tab（2026-09-22 改版：白卡三段 = 目标 / 验收标准 / 条款，视觉语言对齐
+// 验收台判定面与创建弹窗 Bento；原「键值表 + 平铺列表」退役）。
 function ContractTab({ task }: { task: Task }): JSX.Element {
   const refined = task.contract.sourceOfAcceptance === 'ai-refined' && task.contract.originalHumanAcceptance !== undefined
+  const sourceLabel = task.contract.sourceOfAcceptance === 'human' ? '用户手写' : task.contract.sourceOfAcceptance === 'ai-drafted' ? 'AI 建议稿' : 'AI 细化'
   return (
     <>
-      <div className="tf-section">
-        <span className="tf-section-title">合同（目标 · 验收 · 钉脚）</span>
-        <dl className="tf-kv">
-          <dt>目标</dt>
-          <dd>{task.contract.objective}</dd>
-          <dt>验收来源</dt>
-          <dd>{task.contract.sourceOfAcceptance === 'human' ? '用户手写' : task.contract.sourceOfAcceptance === 'ai-drafted' ? 'AI 建议稿' : 'AI 细化（保留原文对照）'}</dd>
-          <dt>迭代上限</dt>
-          <dd>{task.maxRounds === null ? '不限' : task.maxRounds}（当前第 {task.round} 轮）</dd>
-          <dt>权限</dt>
-          <dd>
-            {task.contract.pins.permission}
-            {!task.permissionConfirmed && ' · 需确认'}
-          </dd>
+      <div className="tf-ct-card tf-ct-goal-card">
+        <div className="tf-ct-head">
+          <span className="tf-ct-name">目标</span>
+          <span className="tf-ct-rule" />
+          {!task.permissionConfirmed && <span className="tf-chip tf-chip-amber"><i />执行权限待确认</span>}
+        </div>
+        <div className="tf-ct-goal">{task.contract.objective}</div>
+      </div>
+      <div className="tf-ct-card tf-ct-ac-card">
+        <div className="tf-ct-head">
+          <span className="tf-ct-name">验收标准</span>
+          <span className="tf-ct-rule" />
+          <span className="tf-ct-term"><span className="tf-ct-k">来源</span>{sourceLabel}</span>
+        </div>
+        <AcceptanceList items={task.contract.acceptance} />
+        {refined && (
+          <div className="tf-ct-origin">
+            {(task.contract.originalHumanAcceptance ?? []).map(item => (
+              <span className="tf-ct-origin-q" key={item.id}>{item.text}</span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="tf-ct-card tf-ct-term-card">
+        <div className="tf-ct-head">
+          <span className="tf-ct-name">条款</span>
+          <span className="tf-ct-rule" />
+        </div>
+        <div className="tf-ct-terms">
+          <span className="tf-ct-k">权限</span>
+          <span className="tf-ct-v"><span className="tf-chip tf-chip-blue">{task.contract.pins.permission}</span></span>
+          <span className="tf-ct-k">迭代</span>
+          <span className="tf-ct-v"><span className="tf-chip tf-chip-num"><b>{task.round}</b><small> / {task.maxRounds === null ? '不限' : task.maxRounds} 轮</small></span></span>
           {task.contract.pins.workspace.trim().length > 0 && (
             <>
-              <dt>工作目录</dt>
-              <dd><code className="tf-ws-path">{task.contract.pins.workspace}</code>（改动钉定区域）</dd>
+              <span className="tf-ct-k">工作目录</span>
+              <span className="tf-ct-v"><code className="tf-ws-path" title={task.contract.pins.workspace}>{task.contract.pins.workspace}</code></span>
             </>
           )}
-        </dl>
+        </div>
       </div>
-      <AcceptanceList items={task.contract.acceptance} title="任务级验收标准" />
-      {refined && <AcceptanceList items={task.contract.originalHumanAcceptance ?? []} title="用户原文（对照视图）" />}
     </>
   )
 }
 
-function AcceptanceList({ items, title }: { items: AcceptanceItem[]; title: string }): JSX.Element {
+function AcceptanceList({ items }: { items: AcceptanceItem[] }): JSX.Element {
+  if (items.length === 0) return <span className="tf-hint">（空 —— AI 拆解时会补全建议稿）</span>
   return (
-    <div className="tf-section">
-      <span className="tf-section-title">{title}</span>
-      {items.length === 0 ? (
-        <span className="tf-hint">（空 —— AI 拆解时会补全建议稿）</span>
-      ) : (
-        items.map(item => (
-          <div className="tf-ac" key={item.id}>
-            <span className="tf-ac-id">{item.id}</span>
-            <span>{item.text}</span>
-          </div>
-        ))
-      )}
-    </div>
+    <>
+      {items.map((item, i) => (
+        <div className="tf-ac-row" key={item.id}>
+          {/* 展示位用短序号（AC-1/AC-2…）；item.id 是内部机器 id，不外显 */}
+          <span className="tf-ac-badge">AC-{i + 1}</span>
+          <span>{item.text}</span>
+        </div>
+      ))}
+    </>
   )
 }
 
@@ -1771,21 +1788,24 @@ function SubtasksTab({ task }: { task: Task }): JSX.Element {
     <div className="tf-section">
       <span className="tf-section-title">子任务（{task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length}/{task.subtasks.length} 完成）</span>
       <div className="tf-list">
-        {task.subtasks.map(sub => (
-          <SubtaskItem key={sub.id} sub={sub} task={task} />
+        {task.subtasks.map((sub, i) => (
+          <SubtaskItem key={sub.id} sub={sub} task={task} index={i} />
         ))}
       </div>
     </div>
   )
 }
 
-function SubtaskItem({ sub, task }: { sub: Subtask; task: Task }): JSX.Element {
+/** 子任务展示序号（S1/S2…）：编号类标记统一用它做前缀，避免各卡内部 AC-1 撞号。 */
+
+function SubtaskItem({ sub, task, index }: { sub: Subtask; task: Task; index: number }): JSX.Element {
   const wait = subtaskWait(task, sub)
   return (
     <div className="tf-item">
       <div className="tf-item-head">
         <StatusDot status={sub.status} />
         <span className="tf-item-title">{sub.title}</span>
+        <span className="tf-chip">S{index + 1}</span>
         <span className="tf-chip">{subtaskStatusLabel(sub.status)}</span>
         {wait?.kind === 'deps' && (
           <span className="tf-chip tf-chip-warn" title={`等待依赖完成：${wait.blockers.join('、')}`}>
@@ -1798,18 +1818,15 @@ function SubtaskItem({ sub, task }: { sub: Subtask; task: Task }): JSX.Element {
       </div>
       {sub.detail.trim().length > 0 && <span className="tf-hint">{sub.detail}</span>}
       <div className="tf-section">
-        {sub.acceptance.map(item => (
+        {sub.acceptance.map((item, i) => (
           <div className="tf-ac" key={item.id}>
-            <span className="tf-ac-id">{item.id}</span>
+            <span className="tf-ac-id">S{index + 1}·AC-{i + 1}</span>
             <span>{item.text}</span>
           </div>
         ))}
       </div>
-      {sub.sessionId !== undefined && (
-        <span className="tf-hint">
-          会话：<button type="button" className="tf-session-link" title="复制会话 id" onClick={() => void navigator.clipboard?.writeText(sub.sessionId ?? '')}>{sub.sessionId}</button>
-        </span>
-      )}
+      {/* 会话裸 id 不再外显：对人有意义的轮次/次数已由上方 chip 承担；
+          排障需要完整 id 时去 ledger.json / 宿主日志查。 */}
       {sub.progressNotes.length > 0 && (
         <span className="tf-hint">最近便签：{sub.progressNotes.at(-1)}</span>
       )}
@@ -1976,7 +1993,7 @@ function ReviewTab({
           </button>
           {procOpen && (
             <div className="tf-proc">
-              {task.subtasks.map(sub => (
+              {task.subtasks.map((sub, idx) => (
                 <div className="tf-proc-item" key={sub.id}>
                   <button
                     type="button"
@@ -1986,14 +2003,14 @@ function ReviewTab({
                   >
                     <span className={`tf-ev-caret${openSubId === sub.id ? ' open' : ''}`} aria-hidden="true">▶</span>
                     <StatusDot status={sub.status} />
-                    <span className="tf-proc-title">{sub.title}</span>
+                    <span className="tf-proc-title">S{idx + 1} · {sub.title}</span>
                     {sub.evidence !== undefined && sub.acceptance.length > 0 && (
                       <ProcBadge sub={sub} />
                     )}
                   </button>
                   {openSubId === sub.id && (sub.evidence !== undefined
                     ? <EvidenceDetail key={sub.id} sub={sub} previewArtifact={previewArtifact} />
-                    : <NoEvidencePanel sub={sub} />)}
+                    : <NoEvidencePanel sub={sub} no={idx + 1} />)}
                 </div>
               ))}
             </div>
@@ -2053,21 +2070,22 @@ function ProcBadge({ sub }: { sub: Subtask }): JSX.Element {
 }
 
 /** 未举证子任务的详情占位：给足上下文（说明 + 子任务验收标准），点开任何一行都有内容。 */
-function NoEvidencePanel({ sub }: { sub: Subtask }): JSX.Element {
+function NoEvidencePanel({ sub, no }: { sub: Subtask; no?: number }): JSX.Element {
   return (
     <div className="tf-item">
       <div className="tf-item-head">
         <StatusDot status={sub.status} />
         <span className="tf-item-title">{sub.title}</span>
+        {no !== undefined && <span className="tf-chip">S{no}</span>}
         <span className="tf-chip">{subtaskStatusLabel(sub.status)}</span>
         {sub.round > 1 && <span className="tf-chip">第 {sub.round} 轮</span>}
       </div>
       {sub.detail.trim().length > 0 && <span className="tf-hint">{sub.detail}</span>}
       <div className="tf-section">
         <span className="tf-section-title">子任务验收标准</span>
-        {sub.acceptance.map(item => (
+        {sub.acceptance.map((item, i) => (
           <div className="tf-ac" key={item.id}>
-            <span className="tf-ac-id">{item.id}</span>
+            <span className="tf-ac-id">{no !== undefined ? `S${no}·` : ''}AC-{i + 1}</span>
             <span>{item.text}</span>
           </div>
         ))}
@@ -2205,7 +2223,7 @@ function EvidenceDetail({ sub, previewArtifact }: { sub: Subtask; previewArtifac
         status={sub.status}
       />
       <span className="tf-hint">
-        产出会话：{evidence.refs.sessionId}
+        产出：第 {sub.round} 轮执行{sub.attempt > 1 ? `（重试 attempt ${sub.attempt}）` : ''}
         {modelForSession(sub, evidence.refs.sessionId) !== undefined && (
           <> · 模型 <span className="tf-chip tf-chip-mono">{modelForSession(sub, evidence.refs.sessionId)}</span></>
         )}
@@ -2241,18 +2259,14 @@ function TimelineRow({ entry }: { entry: TimelineEntry }): JSX.Element {
 function DecomposeTab({ task }: { task: Task }): JSX.Element {
   return (
     <div className="tf-section">
-      <span className="tf-section-title">拆解会话</span>
+      <span className="tf-section-title">拆解记录</span>
       {task.decomposeSessionIds.length === 0 ? (
         <span className="tf-hint">尚未拆解。</span>
+      ) : task.decomposeSessionIds.length === 1 ? (
+        <span className="tf-hint">AI 拆解 1 次；完整对话可在宿主会话列表中回放。</span>
       ) : (
-        task.decomposeSessionIds.map((sessionId, index) => (
-          <div className="tf-ac" key={sessionId}>
-            <span className="tf-ac-id">#{index + 1}</span>
-            <button type="button" className="tf-session-link" title="复制会话 id" onClick={() => void navigator.clipboard?.writeText(sessionId)}>{sessionId}</button>
-          </div>
-        ))
+        <span className="tf-hint">AI 拆解 {task.decomposeSessionIds.length} 次（含重拆）；完整对话可在宿主会话列表中回放。</span>
       )}
-      <span className="tf-hint">拆解会话的完整对话可在宿主会话列表中回放。</span>
     </div>
   )
 }
