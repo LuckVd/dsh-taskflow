@@ -16,9 +16,9 @@ import type { TaskflowAction } from '../protocol/actions.ts'
 import { DecomposeValidationError, validateDecomposeOutput } from '../protocol/decompose.ts'
 import type { DecomposeOutput } from '../protocol/decompose.ts'
 import { EvidenceRejectedError, normalizeEvidence, parseEvidenceInput, renderEvidenceCorrection } from '../protocol/evidence.ts'
-import type { ApprovalRecord, DispatchResult, EngineState, Evidence, ExecutionMode, GlobalSettings, Ledger, Pins, SessionModelSelection, Subtask, Task } from '../protocol/types.ts'
+import type { ApprovalRecord, DispatchResult, EngineState, Evidence, ExecutionMode, GlobalSettings, Ledger, Pins, SessionModelSelection, Subtask, Task, TokenUsageSummary } from '../protocol/types.ts'
 import type { ArtifactPreview } from '../protocol/types.ts'
-import { resolveExecutionMode } from '../protocol/types.ts'
+import { resolveExecutionMode, sumTokenUsage } from '../protocol/types.ts'
 import { ArtifactPreviewError, readArtifactPreview } from './artifacts.ts'
 import { LedgerStore, LedgerWriteError } from './ledger.ts'
 import { modelLabel } from './settings.ts'
@@ -88,8 +88,8 @@ export type DecomposeResult =
   | { kind: 'failed'; error: string }
 
 export type ExecutionOutcome =
-  | { kind: 'completed' }
-  | { kind: 'crashed'; error: string }
+  | { kind: 'completed'; usage?: TokenUsageSummary }
+  | { kind: 'crashed'; error: string; usage?: TokenUsageSummary }
 
 /** 任务级终检会话输入（会话形制与拆解相同：JSON 文本输出；2026-09-11 语义升级）。 */
 export type FinalCheckSessionInput = DecomposeSessionInput
@@ -1526,6 +1526,9 @@ export class TaskflowEngine {
       if (task === null || sub === undefined) return
       if (task.status === 'cancelled' || task.status === 'archived') return
       if (sub.sessionId !== sessionId) return // 已被新轮次/重启取代
+      // Token 用量回采（2026-09-22）：只要会话归属匹配就累计——即使证据已受理
+      // （status 已是 review）或已 blocked，本轮会话烧掉的 token 也应留痕。
+      if (outcome.usage !== undefined) sub.tokenUsage = sumTokenUsage(sub.tokenUsage, outcome.usage)
       if (sub.status !== 'in-progress') return // review（证据已受理）/ blocked / done：无需处理
 
       // 会话结束但证据未受理：回到排队态（attempt 上限由调度器判定）

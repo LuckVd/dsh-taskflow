@@ -152,6 +152,36 @@ export interface Subtask {
   attempt: number
   /** 当前轮执行中产生的进度便签（taskflow.update_progress）。 */
   progressNotes: string[]
+  /**
+   * Token 用量累计（2026-09-22，可选）：历次执行会话的用量之和，由宿主在会话
+   * 收敛后自会话事件（assistant/message 的 usage）回采落库。undefined = 旧数据
+   * 或适配器未上报（宿主默认不保证各 provider 都回报用量）。
+   */
+  tokenUsage?: TokenUsageSummary
+}
+
+/** 会话 Token 用量（协议层共享形状；同 dsh-llm TokenUsage + 步数）。 */
+export interface TokenUsageSummary {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens?: number
+  cacheWriteTokens?: number
+  reasoningTokens?: number
+  /** 有用量回报的步数（assistant/message 且带 usage 的事件数）。 */
+  steps: number
+}
+
+/** 两份用量相加（可选字段任一存在才保留；steps 恒加，原始 dsh-llm 用量无 steps 视为 0）。纯函数，引擎与适配器共用。 */
+export function sumTokenUsage(a: TokenUsageSummary | undefined, b: TokenUsageSummary): TokenUsageSummary {
+  const merge = (x?: number, y?: number): number | undefined => x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0)
+  return {
+    inputTokens: (a?.inputTokens ?? 0) + (b.inputTokens ?? 0),
+    outputTokens: (a?.outputTokens ?? 0) + (b.outputTokens ?? 0),
+    ...(merge(a?.cacheReadTokens, b.cacheReadTokens) !== undefined ? { cacheReadTokens: merge(a?.cacheReadTokens, b.cacheReadTokens) } : {}),
+    ...(merge(a?.cacheWriteTokens, b.cacheWriteTokens) !== undefined ? { cacheWriteTokens: merge(a?.cacheWriteTokens, b.cacheWriteTokens) } : {}),
+    ...(merge(a?.reasoningTokens, b.reasoningTokens) !== undefined ? { reasoningTokens: merge(a?.reasoningTokens, b.reasoningTokens) } : {}),
+    steps: (a?.steps ?? 0) + (b.steps ?? 0),
+  }
 }
 
 // —— 完成证明 ——

@@ -16,7 +16,8 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-agent'
 import { asSessionId, createUserMessage, type SessionId } from './compat.ts'
 import type { DecomposeResult, DecomposeSessionInput, ExecutionOutcome, ExecutionSessionInput, FinalCheckSessionInput, SessionAdapter, TriageSessionInput } from '../engine.ts'
-import type { SessionModelSelection } from '../../protocol/types.ts'
+import type { SessionModelSelection, TokenUsageSummary } from '../../protocol/types.ts'
+import { sumTokenUsage } from '../../protocol/types.ts'
 import { registerTaskflowTools } from './tools.ts'
 
 export interface DshAdapterOptions {
@@ -142,6 +143,7 @@ export class DshSessionAdapter implements SessionAdapter {
   }
 
   async runExecutionSession(input: ExecutionSessionInput): Promise<ExecutionOutcome> {
+    let usage: TokenUsageSummary | undefined
     try {
       const handle = await this.createAgent(input, input.tools)
       this.liveSessions.set(input.sessionId, handle.agent.session)
@@ -150,14 +152,16 @@ export class DshSessionAdapter implements SessionAdapter {
         await handle.agent.whenIdle().catch(() => undefined)
         handle.agent.followup(this.buildMessage(input.prompt))
         await handle.agent.whenIdle()
-        return { kind: 'completed' }
+        return { kind: 'completed', ...(usage !== undefined ? { usage } : {}) }
       } finally {
+        // 用量回采在 finally：正常收敛、崩溃、中途被打断的会话都尽可能留痕。
+        usage = sessionTokenUsage(handle.agent.session) ?? usage
         this.liveSessions.delete(input.sessionId)
         this.approvalSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
       }
     } catch (error) {
-      return { kind: 'crashed', error: errorMessage(error) }
+      return { kind: 'crashed', error: errorMessage(error), ...(usage !== undefined ? { usage } : {}) }
     }
   }
 
@@ -188,10 +192,12 @@ export class DshSessionAdapter implements SessionAdapter {
       } as unknown as Parameters<AdapterServices['agents']['resume']>[0])
       this.liveSessions.set(input.sessionId, handle.agent.session)
       this.approvalSessions.set(input.sessionId, { mode: input.executionMode, approvals: input.approvals })
+      let usage: TokenUsageSummary | undefined
       try {
         await handle.agent.whenIdle()
-        return { kind: 'completed' }
+        return { kind: 'completed', ...(usage !== undefined ? { usage } : {}) }
       } finally {
+        usage = sessionTokenUsage(handle.agent.session) ?? usage
         this.liveSessions.delete(input.sessionId)
         this.approvalSessions.delete(input.sessionId)
         await handle.dispose().catch(() => undefined)
@@ -322,8 +328,27 @@ function effectiveSessionPermission(input: DecomposeSessionInput | ExecutionSess
   return input.permission
 }
 
-/** 取最后一条 assistant 文本的拼接（rc.1 事件形如 {type, data}，data 承载负载；兼容扁平形态）。 */
-function lastAssistantText(session: unknown): string {
+/**
+ * 会话 Token 用量回采（2026-09-22）：遍历会话事件，累加所有 `assistant/message`
+ * 事件携带的 `usage`（每步模型记账随消息落事件，无独立 usage 记录）。
+ * 事件形如 {type, data}（rc.1）或扁平 {type, ...}，两形态都兼容。
+ * 无任何用量回报（provider 不记账）= undefined。
+ */
+export function sessionTokenUsage(session: unknown): TokenUsageSummary | undefined {
+  const source = (session ?? {}) as { snapshotEvents?: () => unknown; events?: unknown }
+  const events = (typeof source.snapshotEvents === 'function' ? source.snapshotEvents() : source.events) as Iterable<unknown> | undefined
+  let total: TokenUsageSummary | undefined
+  for (const event of events ?? []) {
+    const record = (event ?? {}) as { type?: unknown; data?: { usage?: TokenUsageSummary }; usage?: TokenUsageSummary }
+    if (record.type !== 'assistant/message') continue
+    const usage = record.data?.usage ?? record.usage
+    if (usage === undefined || typeof usage.inputTokens !== 'number' || typeof usage.outputTokens !== 'number') continue
+    total = sumTokenUsage(total, { ...usage, steps: 1 })
+  }
+  return total
+}
+
+/** 取最后一条 assistant 文本的拼接（rc.1 事件形如 {type, data}，data 承载负载；兼容扁平形态）。 */function lastAssistantText(session: unknown): string {
   const source = session as { snapshotEvents?: () => unknown; events?: unknown }
   const events = (typeof source.snapshotEvents === 'function' ? source.snapshotEvents() : source.events) as Iterable<unknown> | undefined
   const parts: string[] = []
