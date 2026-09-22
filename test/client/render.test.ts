@@ -47,7 +47,7 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
       url: 'http://127.0.0.1:4173/',
       pretendToBeVisual: true,
       runScripts: 'outside-only',
-      virtualConsole: new VirtualConsole(),
+      virtualConsole: (() => { const vc = new VirtualConsole(); for (const ev of ["error", "jsdomError"]) vc.on(ev, (...a) => console.log("[JSDOM]", ev, ...a.map(x => x?.stack ?? x))); return vc })(),
     })
     const { window } = dom
 
@@ -148,10 +148,12 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(doc.querySelector('.tf-modal[aria-modal="true"]')).toBeTruthy()
     const tabs = [...doc.querySelectorAll('.tf-tab')].map(el => el.textContent)
     expect(tabs.join(',')).toContain('合同')
+    expect(tabs.join(',')).toContain('流程')
     expect(tabs.join(',')).toContain('子任务')
     expect(tabs.join(',')).toContain('验收')
-    expect(tabs.join(',')).toContain('历史')
     expect(tabs.join(',')).toContain('拆解记录')
+    // 历史 tab 已退役（三期：轨迹内嵌流程图节点，点节点查看）
+    expect(tabs.join(',')).not.toContain('历史')
 
     // 子任务标签
     const subtasksTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('子任务'))
@@ -200,16 +202,24 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     await waitFor(() => engine.getState().ledger.tasks[0]!.round === 2)
   })
 
-  it('第二轮执行后回到待验收；时间线含打回批语', async () => {
+  it('第二轮执行后回到待验收；流程图节点轨迹面板含打回批语（历史 tab 退役）', async () => {
     await waitFor(() => engine.getState().ledger.tasks[0]!.status === 'review')
     const doc = dom.window.document
-    const historyTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('历史'))
-    expect(historyTab).toBeTruthy()
-    ;(historyTab as HTMLElement).click()
-    await waitFor(() => doc.querySelector('.tf-timeline') !== null)
-    const text = doc.querySelector('.tf-timeline')!.textContent ?? ''
-    expect(text).toContain('人')
-    expect(text).toContain('批语')
+    const flowTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('流程'))
+    expect(flowTab).toBeTruthy()
+    ;(flowTab as HTMLElement).click()
+    // 点「人工终批」相位药丸 → 下方展开该节点轨迹（reject 事件带批语，落在终批兜底桶）
+    await waitFor(() => doc.querySelector('g.tf-dag-phase[aria-label*="人工终批"]') !== null)
+    const acceptNode = doc.querySelector('g.tf-dag-phase[aria-label*="人工终批"]')!
+    acceptNode.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => doc.querySelector('.tf-dag-panel') !== null)
+    const panel = doc.querySelector('.tf-dag-panel')!
+    expect(panel.textContent).toContain('人工终批')
+    expect(panel.textContent).toContain('批语')
+    expect(panel.textContent).toContain('人')
+    // 执行已完成（review 等终批）：面板标静态条数，不显示实时滚动 chip
+    expect(panel.textContent).not.toContain('实时滚动')
+    expect(panel.textContent).toContain('条记录')
   })
 
   it('流程 tab（FR-12 可视化）：管线相位药丸 + DAG 子任务节点（状态类名与标题）', async () => {

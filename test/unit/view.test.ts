@@ -4,15 +4,16 @@ import {
   cardSummary,
   columnOf,
   filterTasks,
-  mergedTimeline,
   modelForSession,
   pendingApprovalCount,
   pendingApprovalsOf,
+  phaseTimeline,
   progressRatio,
   reviewBadgeCount,
   relativeTime,
   statusLabel,
   subtaskStatusLabel,
+  subtaskTimeline,
   subtaskWait,
   reportStats,
   dagLayout,
@@ -153,35 +154,45 @@ describe('过滤与角标', () => {
   })
 })
 
-describe('时间线合并（US-09）', () => {
-  it('任务级 + 子任务级事件按时间倒序、标签可读、批语保留', () => {
-    const task = mkTask({
-      subtasks: [
-        mkSubtask({
-          history: [
-            { id: 'sa', at: 300, from: null, to: 'pending', actor: 'system' },
-            { id: 'sb', at: 500, from: 'review', to: 'rejected', actor: 'human', reason: '缺边界测试' },
-          ],
-        }),
-      ],
-      events: [
-        { id: 'e1', at: 100, from: null, to: 'draft', actor: 'human' },
-        { id: 'e4', at: 600, from: 'review', to: 'in-progress', actor: 'human', reason: '打回：补测试（T7）' },
+describe('节点轨迹（三期：历史内嵌流程图，升序 = 最新在末尾）', () => {
+  it('子任务轨迹升序 + 标签可读 + 批语保留', () => {
+    const sub = mkSubtask({
+      history: [
+        { id: 'sa', at: 300, from: null, to: 'pending', actor: 'system' },
+        { id: 'sb', at: 500, from: 'review', to: 'rejected', actor: 'human', reason: '缺边界测试' },
       ],
     })
-    const timeline = mergedTimeline(task)
-    expect(timeline.map(e => e.id)).toEqual(['e4', 'sb', 'sa', 'e1'])
+    const timeline = subtaskTimeline(sub)
+    expect(timeline.map(e => e.id)).toEqual(['sa', 'sb'])
     expect(timeline[1]!.detail).toBe('缺边界测试')
     expect(timeline[1]!.label).toContain('被打回')
-    expect(timeline[0]!.label).toBe('待验收 → 实现中')
+  })
+
+  it('相位轨迹分流：拆解/终检各归其位，终批兜底其余任务事件（零盲区）', () => {
+    const task = mkTask({
+      events: [
+        { id: 'e1', at: 100, from: null, to: 'draft', actor: 'human' },
+        { id: 'e2', at: 200, from: 'draft', to: 'decomposing', actor: 'human' },
+        { id: 'e3', at: 300, from: 'decomposing', to: 'ready', actor: 'system', kind: 'subtasks-edited', reason: '人工编辑拆解结果' },
+        { id: 'e4', at: 400, from: 'in-progress', to: 'in-progress', actor: 'system', kind: 'final-check-started', reason: 'AI 终检开始' },
+        { id: 'e5', at: 500, from: 'in-progress', to: 'review', actor: 'system', reason: 'T5' },
+        { id: 'e6', at: 600, from: 'review', to: 'in-progress', actor: 'human', kind: 'reject', reason: '打回批语：补测试（AI 定位返工范围中）' },
+      ],
+    })
+    expect(phaseTimeline(task, 'decompose').map(e => e.id)).toEqual(['e2', 'e3'])
+    expect(phaseTimeline(task, 'finalcheck').map(e => e.id)).toEqual(['e4'])
+    const accept = phaseTimeline(task, 'accept')
+    expect(accept.map(e => e.id)).toEqual(['e1', 'e5', 'e6'])
+    expect(accept.find(e => e.id === 'e6')?.detail).toContain('打回批语')
+    expect(accept.find(e => e.id === 'e5')?.label).toBe('实现中 → 待验收')
     expect(statusLabel('in-progress')).toBe('实现中')
   })
 
-  it('非状态事件（进度/证据/恢复）有可读标签', () => {
+  it('非状态事件（进度）有可读标签，任务级记录落入终批兜底桶', () => {
     const task = mkTask({
       events: [{ id: 'p', at: 1, from: 'in-progress', to: 'in-progress', actor: 'ai', kind: 'progress', reason: '写测试中' }],
     })
-    const [entry] = mergedTimeline(task)
+    const [entry] = phaseTimeline(task, 'accept')
     expect(entry.label).toBe('进度')
     expect(entry.isTransition).toBe(false)
   })
@@ -293,10 +304,11 @@ describe('模型留痕视图（§PLAN-MODEL）', () => {
         } as unknown as Subtask,
       ],
     })
-    const entries = mergedTimeline(task)
-    expect(entries.find(entry => entry.id === 'e2')?.model).toBe('deepseek/deepseek-reasoner·high')
-    expect(entries.find(entry => entry.id === 'sev2')?.model).toBe('ollama/qwen3:8b')
-    expect(entries.find(entry => entry.id === 'sev1')?.model).toBeUndefined()
+    const decompose = phaseTimeline(task, 'decompose')
+    expect(decompose.find(entry => entry.id === 'e2')?.model).toBe('deepseek/deepseek-reasoner·high')
+    const subEntries = subtaskTimeline(task.subtasks[0] as Subtask)
+    expect(subEntries.find(entry => entry.id === 'sev2')?.model).toBe('ollama/qwen3:8b')
+    expect(subEntries.find(entry => entry.id === 'sev1')?.model).toBeUndefined()
   })
 
   it('modelForSession：按 sessionId 反查最近一次留痕', () => {

@@ -375,6 +375,13 @@ export const TASKFLOW_CSS = `
 .tf-dag-phase-review .tf-dag-phase-label { fill: ${V.business}; }
 .tf-dag-phase-blocked > rect { stroke: ${V.errorSecondary}; fill: ${V.errorTertiary}; }
 .tf-dag-phase-blocked .tf-dag-phase-label { fill: ${V.errorSecondary}; }
+/* 节点可点（三期：点节点看轨迹）；选中/聚焦高亮 */
+.tf-dag-node, .tf-dag-phase { cursor: pointer; }
+.tf-dag-node:focus-visible > rect, .tf-dag-phase:focus-visible > rect, .tf-dag-selected > rect { stroke-width: 2.6; }
+/* 节点轨迹面板：升序时间线 + 执行中钉底滚动（max-height 防长史撑爆弹窗） */
+.tf-dag-panel { border: 1px solid ${V.borderL1}; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; background: ${V.bgBase}; }
+.tf-dag-panel-head { display: flex; align-items: center; gap: 8px; }
+.tf-dag-panel .tf-timeline { max-height: 240px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
 @media (prefers-reduced-motion: reduce) {
   .tf-dag-edge-flow, .tf-dag-node-in-progress > rect, .tf-dag-phase-in-progress > rect { animation: none; }
 }

@@ -243,15 +243,6 @@ function describeSubtaskEvent(event: SubtaskEvent, subtask: Subtask): TimelineEn
   }
 }
 
-/** 任务级 + 子任务级事件合并按时间倒序（US-09 / §4.8 M1 形态）。 */
-export function mergedTimeline(task: Task): TimelineEntry[] {
-  const entries: TimelineEntry[] = task.events.map(describeTaskEvent)
-  for (const sub of task.subtasks) {
-    entries.push(...sub.history.map(event => describeSubtaskEvent(event, sub)))
-  }
-  return entries.sort((a, b) => b.at - a.at)
-}
-
 export function actorLabel(actor: TimelineEntry['actor']): string {
   return ACTOR_LABEL[actor] ?? actor
 }
@@ -423,6 +414,39 @@ export function dagPhases(task: Task): DagPhase[] {
           ? { id: 'accept', label: '人工终批', status: 'blocked', line: '任务已取消' }
           : { id: 'accept', label: '人工终批', status: 'pending', line: '对照合同验收标准' }
   return [decompose, finalcheck, accept]
+}
+
+// —— DAG 流程图：节点轨迹（三期：历史内嵌到流程图，点节点看它的执行史） ——
+
+/** 子任务轨迹（升序：旧→新，末尾即最新——执行中面板自动滚到底部）。 */
+export function subtaskTimeline(sub: Subtask): TimelineEntry[] {
+  return sub.history.map(event => describeSubtaskEvent(event, sub)).sort((a, b) => a.at - b.at)
+}
+
+const DECOMPOSE_EVENT_KINDS = new Set(['decompose-retry', 'subtasks-edited'])
+const FINALCHECK_EVENT_KINDS = new Set([
+  'final-check-started',
+  'final-check-retry',
+  'final-check-fallback',
+  'final-check-discarded',
+  'task-evidence-submitted',
+  'task-evidence-invalidated',
+])
+
+/**
+ * 相位轨迹（升序，纯投影）：拆解 = 拆解相关流转与事件；终检 = 终检相关事件；
+ * 终批 = 其余全部任务事件（兜底分流——历史没有独立 tab 后，任何任务级事件
+ * 都能在某个相位面板里找到，不留盲区）。
+ */
+export function phaseTimeline(task: Task, phase: DagPhaseId): TimelineEntry[] {
+  const ofDecompose = (event: TaskEvent): boolean =>
+    (event.kind !== undefined && DECOMPOSE_EVENT_KINDS.has(event.kind)) ||
+    event.from === 'decomposing' || event.to === 'decomposing' || event.to === 'ready'
+  const ofFinalcheck = (event: TaskEvent): boolean => event.kind !== undefined && FINALCHECK_EVENT_KINDS.has(event.kind)
+  const picked = task.events.filter(event =>
+    phase === 'decompose' ? ofDecompose(event) : phase === 'finalcheck' ? ofFinalcheck(event) : !ofDecompose(event) && !ofFinalcheck(event),
+  )
+  return picked.map(describeTaskEvent).sort((a, b) => a.at - b.at)
 }
 
 /** 距现在的相对时间。 */

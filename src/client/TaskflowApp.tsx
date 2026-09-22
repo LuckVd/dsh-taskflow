@@ -14,11 +14,11 @@ import {
   decimalOf,
   filterTasks,
   formatBytes,
-  mergedTimeline,
   modelForSession,
   pendingApprovalCount,
   pendingApprovalsOf,
   percentOf,
+  phaseTimeline,
   progressRatio,
   relativeTime,
   reportStats,
@@ -26,10 +26,11 @@ import {
   shortArtifactPath,
   statusLabel,
   subtaskStatusLabel,
+  subtaskTimeline,
   subtaskWait,
   truncateForDag,
 } from './view.ts'
-import type { CardSummary, DagNode, DagPhase, PendingApprovalView, TimelineEntry } from './view.ts'
+import type { CardSummary, DagNode, DagPhase, DagPhaseId, PendingApprovalView, TimelineEntry } from './view.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
 import {
@@ -45,7 +46,7 @@ import type { Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSett
 import { CAPABILITIES } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
-type TabId = 'contract' | 'flow' | 'subtasks' | 'review' | 'deliverables' | 'history' | 'decompose'
+type TabId = 'contract' | 'flow' | 'subtasks' | 'review' | 'deliverables' | 'decompose'
 
 const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
   { id: 'contract', title: '合同' },
@@ -53,7 +54,6 @@ const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
   { id: 'subtasks', title: '子任务' },
   { id: 'review', title: '验收' },
   { id: 'deliverables', title: '产物' },
-  { id: 'history', title: '历史' },
   { id: 'decompose', title: '拆解记录' },
 ]
 
@@ -1097,7 +1097,6 @@ function DetailModal({
           {tab === 'subtasks' && <SubtasksTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} />}
           {tab === 'deliverables' && <DeliverablesTab task={task} transport={transport} />}
-          {tab === 'history' && <HistoryTab task={task} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
         </div>
         <footer className="tf-modal-foot">
@@ -1312,9 +1311,20 @@ function dagNodePos(node: DagNode): { x: number; y: number } {
   return { x: dagLayerX(node.layer + 1), y: DAG_PAD + node.index * (DAG_NODE_H + DAG_GAP_Y) }
 }
 
+/** 流程图节点选中态：点子任务卡或相位药丸 → 下方展开该节点的执行轨迹。 */
+type DagSelection = { kind: 'sub'; id: string } | { kind: 'phase'; id: DagPhaseId }
+
+/** 节点键盘可达（Enter/Space）+ 鼠标/键盘统一入口。 */
+function selectNode(event: { type: string; key?: string; preventDefault(): void }, select: () => void): void {
+  if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return
+  event.preventDefault()
+  select()
+}
+
 function FlowTab({ task }: { task: Task }): JSX.Element {
   const layout = useMemo(() => dagLayout(task), [task])
   const phases = useMemo(() => dagPhases(task), [task])
+  const [selected, setSelected] = useState<DagSelection | null>(null)
   const phaseById = new Map(phases.map(p => [p.id, p]))
   const rows = Math.max(1, ...layout.layerSizes)
   const totalLayers = 3 + layout.layerCount // 拆解 + 子任务层 + 终检 + 终批
@@ -1338,7 +1348,7 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
         执行流程（{doneCount}/{task.subtasks.length} 完成{task.subtasks.length === 0 && task.status === 'decomposing' ? ' · 拆解中' : ''} · 实时）
       </span>
       <span className="tf-hint">
-        任务管线从左到右：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。悬停可看详情。
+        任务管线从左到右：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。点击节点查看它的执行轨迹。
       </span>
       <div className="tf-dag-scroll">
         <svg
@@ -1442,8 +1452,16 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
               { phase: phases[2]!, box: acceptBox },
             ]
             return boxes.map(({ phase, box }) => (
-              <g key={phase.id} className={`tf-dag-phase tf-dag-phase-${phase.status}`}>
-                <title>{`${phase.label} · ${phase.line}`}</title>
+              <g
+                key={phase.id}
+                className={`tf-dag-phase tf-dag-phase-${phase.status}${selected !== null && selected.kind === 'phase' && selected.id === phase.id ? ' tf-dag-selected' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`${phase.label}（${phase.line}），点击查看轨迹`}
+                onClick={event => selectNode(event, () => setSelected({ kind: 'phase', id: phase.id }))}
+                onKeyDown={event => selectNode(event, () => setSelected({ kind: 'phase', id: phase.id }))}
+              >
+                <title>{`${phase.label} · ${phase.line}（点击查看轨迹）`}</title>
                 <rect x={box.x} y={box.y} width={DAG_NODE_W} height={DAG_NODE_H} rx={DAG_NODE_H / 2} />
                 <text className="tf-dag-phase-label" x={box.x + DAG_NODE_W / 2} y={box.y + 26} textAnchor="middle">{phase.label}</text>
                 <text className="tf-dag-sub" x={box.x + DAG_NODE_W / 2} y={box.y + 44} textAnchor="middle">{phase.line}</text>
@@ -1460,11 +1478,20 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
                   ? '排队中（等并发空位）'
                   : subtaskStatusLabel(status)
             return (
-              <g key={node.sub.id} className={`tf-dag-node tf-dag-node-${status}`}>
+              <g
+                key={node.sub.id}
+                className={`tf-dag-node tf-dag-node-${status}${selected !== null && selected.kind === 'sub' && selected.id === node.sub.id ? ' tf-dag-selected' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`子任务「${node.sub.title}」（${subtaskStatusLabel(status)}），点击查看轨迹`}
+                onClick={event => selectNode(event, () => setSelected({ kind: 'sub', id: node.sub.id }))}
+                onKeyDown={event => selectNode(event, () => setSelected({ kind: 'sub', id: node.sub.id }))}
+              >
                 <title>
                   {`${node.sub.title} · ${subtaskStatusLabel(status)}` +
                     (node.sub.round > 1 ? ` · 第 ${node.sub.round} 轮` : '') +
-                    (node.wait?.kind === 'deps' ? ` · 等待：${node.wait.blockers.join('、')}` : '')}
+                    (node.wait?.kind === 'deps' ? ` · 等待：${node.wait.blockers.join('、')}` : '') +
+                    '（点击查看轨迹）'}
                 </title>
                 <rect x={x} y={y} width={DAG_NODE_W} height={DAG_NODE_H} rx={10} />
                 <circle cx={x + 14} cy={y + 17} r={4} />
@@ -1477,6 +1504,49 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
             )
           })}
         </svg>
+      </div>
+      {selected === null
+        ? <span className="tf-hint">点击图中节点（子任务卡 / 阶段药丸）查看它的执行轨迹；执行中的节点会实时滚动更新最新进度。</span>
+        : <DagHistoryPanel task={task} selection={selected} />}
+    </div>
+  )
+}
+
+/** 节点轨迹面板（三期：历史内嵌流程图）：点选节点 → 下方升序时间线；
+ *  执行中（子任务有会话 / 相位运行中）自动滚到底部，新进度便签实时追加。 */
+function DagHistoryPanel({ task, selection }: { task: Task; selection: DagSelection }): JSX.Element | null {
+  const sub = selection.kind === 'sub' ? task.subtasks.find(s => s.id === selection.id) : undefined
+  const phase = selection.kind === 'phase' ? dagPhases(task).find(p => p.id === selection.id) : undefined
+  const entries = selection.kind === 'sub'
+    ? sub !== undefined ? subtaskTimeline(sub) : []
+    : phaseTimeline(task, selection.id)
+  const live = selection.kind === 'sub'
+    ? sub !== undefined && sub.status === 'in-progress' && sub.sessionId !== undefined
+    : phase?.status === 'in-progress'
+  const title = selection.kind === 'sub'
+    ? sub !== undefined ? `「${sub.title}」轨迹` : '子任务已不存在'
+    : `${phase?.label ?? ''} · 记录`
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    // 执行中钉住底部（新便签/新事件到达即跟随）；已完成时初次也落到底部（最新在末尾）。
+    // scrollTop 赋值而非 scrollTo()：jsdom 未实现 element.scrollTo（渲染冒烟会炸）。
+    const el = listRef.current
+    if (el !== null) el.scrollTop = el.scrollHeight
+  }, [entries.length, live, selection])
+  if (selection.kind === 'sub' && sub === undefined) return null
+  return (
+    <div className="tf-dag-panel">
+      <div className="tf-dag-panel-head">
+        <span className="tf-section-title">{title}</span>
+        {live
+          ? <span className="tf-chip tf-chip-warn">执行中 · 实时滚动</span>
+          : <span className="tf-chip">{entries.length} 条记录</span>}
+      </div>
+      <div className="tf-timeline" ref={listRef}>
+        {entries.length === 0 && <span className="tf-hint">暂无记录。</span>}
+        {entries.map(entry => (
+          <TimelineRow key={entry.id} entry={entry} />
+        ))}
       </div>
     </div>
   )
@@ -1930,21 +2000,8 @@ function EvidenceDetail({ sub, previewArtifact }: { sub: Subtask; previewArtifac
   )
 }
 
-// —— 历史时间线（FR-09）——
-
-function HistoryTab({ task }: { task: Task }): JSX.Element {
-  const entries = mergedTimeline(task)
-  return (
-    <div className="tf-section">
-      <span className="tf-section-title">状态时间线（谁 · 何时 · 从哪到哪 · 为什么）</span>
-      <div className="tf-timeline">
-        {entries.map(entry => (
-          <TimelineRow key={entry.id} entry={entry} />
-        ))}
-      </div>
-    </div>
-  )
-}
+// —— 历史时间线（FR-09；2026-09-21 三期：独立 tab 退役，TimelineRow 由流程图
+//    节点轨迹面板复用）——
 
 function TimelineRow({ entry }: { entry: TimelineEntry }): JSX.Element {
   const time = new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
