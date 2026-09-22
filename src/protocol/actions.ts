@@ -8,7 +8,7 @@
  * @module dsh-taskflow/protocol
  */
 
-import { CAPABILITIES } from './types.ts'
+import { CAPABILITIES, MAX_LINEAGE_PARENTS } from './types.ts'
 import type { AcceptanceItem } from './types.ts'
 
 export type TaskflowAction =
@@ -45,6 +45,11 @@ export interface CreateTaskAction {
   /** 创建后立即触发拆解（默认 true，对应 T2 的自动形态）。 */
   autoDecompose?: boolean
   maxRounds?: number | null
+  /**
+   * 血缘父任务 id 列表（PLAN-FOLLOWUP，可选）：接续创建。每个父任务必须存在且
+   * done（引擎守卫）；最多 {@link MAX_LINEAGE_PARENTS} 个；缺省 = 普通创建。
+   */
+  basedOn?: string[]
 }
 
 export interface StartDecomposeAction {
@@ -236,6 +241,7 @@ export function validateActionShape(action: unknown): TaskflowAction {
       validateAutoStartFlag(action.autoStart)
       validateAutoDecomposeFlag(action.autoDecompose)
       validateMaxRounds(action.maxRounds)
+      validateBasedOn(action.basedOn)
       return { ...rest, title, description } as unknown as CreateTaskAction
     }
     case 'startDecompose':
@@ -365,6 +371,21 @@ function validateAutoStartFlag(value: unknown): void {
 
 function validateAutoDecomposeFlag(value: unknown): void {
   if (value !== undefined && typeof value !== 'boolean') throw new ActionFormatError('autoDecompose must be a boolean.')
+}
+
+function validateBasedOn(value: unknown): void {
+  if (value === undefined) return
+  if (!Array.isArray(value)) throw new ActionFormatError('basedOn must be an array of task ids.')
+  if (value.length === 0) throw new ActionFormatError('basedOn must not be empty when provided.')
+  if (value.length > MAX_LINEAGE_PARENTS) {
+    throw new ActionFormatError(`basedOn supports at most ${MAX_LINEAGE_PARENTS} parent tasks.`)
+  }
+  const seen = new Set<string>()
+  for (const [i, id] of value.entries()) {
+    const normalized = requireString(id, `basedOn[${i}]`, { max: 128 })
+    if (seen.has(normalized)) throw new ActionFormatError(`basedOn contains duplicate id "${normalized}".`)
+    seen.add(normalized)
+  }
 }
 
 function validateMaxRounds(value: unknown, opts: { optional: boolean } = { optional: true }): void {

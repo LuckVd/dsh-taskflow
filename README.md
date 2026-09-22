@@ -23,6 +23,14 @@
 
 ## 当前状态
 
+🔗 **任务接续 / 血缘 DAG 已实现**（2026-09-22，方案与预览见
+[`docs/PLAN-FOLLOWUP.md`](docs/PLAN-FOLLOWUP.md)）——done 卡「接续新任务」 /
+review「确认并接续」签新合同而非重开老合同（状态机零改动）：`basedOn` 建卡
+（父须 done、禁环、上限 10）、pins 缺省继承第一父、逐父独立交接摘要注入拆解
+提示、`parentIds`/`depth` 落库；客户端：可搜索多选继承下拉、合同 tab 接续横幅、
+流程 tab 上一棒节点、看板链徽标与血缘连线层（线在卡上层 + 实心箭头贴目标卡）、
+族谱视图。
+
 🚧 **M1 已实现**（宿主核心 + 客户端 + dsh 集成层，测试与三门禁全绿）——
 见 [`docs/ACCEPTANCE-M1.md`](docs/ACCEPTANCE-M1.md)（自验收报告：逐 FR/NFR 证据与待真机复验清单）。
 

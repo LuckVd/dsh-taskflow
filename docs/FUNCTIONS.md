@@ -446,6 +446,26 @@ type SubtaskStatus =
 - 无新增依赖（不引 dagre 等）：每任务子任务量级（通常 <20）手写分层足够，且布局纯函数可单测（`test/unit/view.test.ts`：分层/孤儿 dep/环防御/相位投影/截断）；渲染冒烟在 `test/client/render.test.ts`（含相位药丸与管线连线断言；夹具 EventSource 模拟已改为常驻监听语义，SSE 实时性真实生效）。
 - **节点轨迹面板（三期，2026-09-21）**：节点可点（鼠标 + 键盘 Enter/Space，role=button，选中描边加粗）→ 图下方展开该节点轨迹（§4.8）：`subtaskTimeline`（子任务事件升序）/ `phaseTimeline`（任务事件按相位分流，终批兜底零盲区）；执行中面板**钉底实时滚动**（`scrollTop` 跟随，jsdom 兼容），已完成显示静态条数。独立「历史」tab 移除，`mergedTimeline` 退役。
 
+### 4.18 任务接续 / 血缘 DAG（2026-09-22）
+
+- **接续 = 签新合同，不重开老合同**（状态机零改动）：done 卡「接续新任务」与
+  review 面「确认并接续」（approve 成功后才弹接续表单）创建关联新任务，
+  `createTask.basedOn` 携带父任务 id（≤10、去重、父须 done——引擎守卫）。
+- 数据：`Task.parentIds?` / `Task.depth?`（= max(父 depth)+1）；创建事件标注
+  「接续自」；另落一条 `kind:'handoff'` 的任务 note 事件（逐父交接摘要）。
+- **交接摘要逐父独立，永不合并**（父间终检结论可能矛盾）：目标 + 终检自检
+  通过率 + 交付物路径 + 遗留缺口（partial/fail 项），单父 1200 字符截断；
+  拆解提示自动注入（`wrapUntrusted` 来源声明包装）。pins 缺省继承第一父，
+  显式传入覆盖。
+- 客户端：创建表单「继承自」可搜索多选下拉（tag + 模糊过滤 + 仅 done）；
+  合同 tab「接续自」逐父横幅；流程 tab 管线最左「上一棒」只读节点组虚线汇入
+  拆解；看板链徽标（⛓ 链·N / ↗N 分叉 / ↙N 合流）；看板血缘连线层
+  （线在卡上层——用户裁定全程可见优先，默认淡显 + hover 本链高亮降噪；
+  实心三角 marker 终点贴目标卡近端边缘；同列按左缘对齐判定走垂直短线）；
+  工具栏「血缘」族谱视图（depth 分层 DAG）。
+- 规格全文与预览：[`PLAN-FOLLOWUP.md`](PLAN-FOLLOWUP.md)（视觉基准
+  `design/lineage-preview.html`）。
+
 ---
 
 ## 5. UI/UX 规格

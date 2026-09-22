@@ -64,6 +64,13 @@ export interface Task {
   finalizeSessionId?: string
   /** 进行中的打回定位（triage）会话 id（返工范围应用后清除）。 */
   triageSessionId?: string
+  /**
+   * 血缘父任务 id 列表（PLAN-FOLLOWUP，可选）：接续创建时写入；父任务必须
+   * done，禁环禁自指（宿主建卡时校验）。undefined/空 = 无血缘（存量任务零迁移）。
+   */
+  parentIds?: string[]
+  /** 血缘深度：max(父 depth)+1；无血缘任务缺省 0（落库缓存，徽标「链·N」用）。 */
+  depth?: number
 }
 
 export interface Contract {
@@ -463,6 +470,13 @@ export const MAX_EVIDENCE_ARTIFACTS = 20
 export const MAX_ARTIFACT_PREVIEW_BYTES = 256 * 1024
 /** 单条 action 体积上限（§6）。 */
 export const MAX_ACTION_BYTES = 64 * 1024;
+
+// —— 任务接续 / 血缘（PLAN-FOLLOWUP）——
+
+/** 单个任务的血缘父任务数上限（合流防塞爆：交接摘要逐父注入，10 已远超真机需要）。 */
+export const MAX_LINEAGE_PARENTS = 10
+/** 交接摘要中单个父任务的章节字符上限（超限截断；逐父独立、永不合并）。 */
+export const HANDOFF_PARENT_SECTION_MAX_CHARS = 1200
 
 // —— 线类型（HTTP/SSE 契约，宿主与浏览器共用）——
 

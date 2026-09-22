@@ -10,11 +10,16 @@ import type { TaskflowTransport } from './api.ts'
 import {
   actorLabel,
   boardGroups,
+  chainBadgeLabel,
   dagLayout,
   dagPhases,
   decimalOf,
   filterTasks,
   formatBytes,
+  handoffPrefill,
+  lineageClosure,
+  lineageEdgesOf,
+  lineageNeighborsOf,
   modelForSession,
   pendingApprovalCount,
   pendingApprovalsOf,
@@ -25,13 +30,15 @@ import {
   reportStats,
   reviewBadgeCount,
   shortArtifactPath,
+  shortTaskId,
   statusLabel,
   subtaskStatusLabel,
   subtaskTimeline,
   subtaskWait,
   truncateForDag,
 } from './view.ts'
-import type { CardSummary, DagNode, DagPhase, DagPhaseId, PendingApprovalView, TimelineEntry } from './view.ts'
+import type { CardSummary, DagNode, DagPhase, DagPhaseId, LineageEdge, PendingApprovalView, TimelineEntry } from './view.ts'
+import type { TaskStatus } from '../protocol/types.ts'
 import { clearBoardFocus, getBoardFocus, subscribeBoardFocus } from './focus.ts'
 import { ModelSettingsPopover } from './ModelSettingsPopover.tsx'
 import {
@@ -44,7 +51,7 @@ import {
 import { parseMarkdown } from './markdown.ts'
 import { renderBlocks } from './MarkdownView.tsx'
 import type { Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSettings, ModelCatalog } from '../protocol/types.ts'
-import { CAPABILITIES } from '../protocol/types.ts'
+import { CAPABILITIES, MAX_LINEAGE_PARENTS } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
 type TabId = 'contract' | 'flow' | 'subtasks' | 'review' | 'deliverables' | 'decompose'
@@ -73,6 +80,12 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusApprovalId, setFocusApprovalId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  /** 接续预填（PLAN-FOLLOWUP）：打开创建表单时带入 basedOn 与描述模板；null = 普通创建。 */
+  const [createPrefill, setCreatePrefill] = useState<{ basedOn?: string[]; description?: string } | null>(null)
+  /** 族谱视图（全量血缘 DAG 弹层）。 */
+  const [lineageOpen, setLineageOpen] = useState(false)
+  /** 看板 hover 链高亮：悬停卡片 id（null = 无 hover，连线全程亮度）。 */
+  const [hoverTaskId, setHoverTaskId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** 统计浮层（FR-20）：只读投影，无持久化。 */
   const [statsOpen, setStatsOpen] = useState(false)
@@ -89,6 +102,8 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   /** 批量打回的共用批语（US-07：打回强制批语，注入每个任务的下一轮迭代）。 */
   const [batchComment, setBatchComment] = useState('')
   const refreshSeq = useRef(0)
+  /** 看板连线层的定位容器（.tf-board-wrap）：卡片坐标相对它换算。 */
+  const boardWrapRef = useRef<HTMLDivElement | null>(null)
   // 全局通知栏「去处理」→ 打开对应任务的抽屉并高亮审批卡（focus.ts 模块级存储）
   const focus = useSyncExternalStore(subscribeBoardFocus, getBoardFocus)
   useEffect(() => {
@@ -179,6 +194,29 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const reviewCount = reviewBadgeCount(tasks)
   const approvalCount = pendingApprovalCount(tasks)
   const selected = tasks.find(t => t.id === selectedId) ?? null
+  // —— 血缘（PLAN-FOLLOWUP）：边表 / 邻居表 / hover 链闭包，全部纯投影自账本 ——
+  const lineageEdges = useMemo(() => lineageEdgesOf(tasks), [tasks])
+  const lineageNeighbors = useMemo(() => lineageNeighborsOf(tasks), [tasks])
+  const taskById = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks])
+  const hoverChain = useMemo(
+    () => (hoverTaskId === null ? null : lineageClosure(hoverTaskId, lineageEdges)),
+    [hoverTaskId, lineageEdges],
+  )
+  const lineageTaskCount = tasks.filter(t =>
+    (t.parentIds?.length ?? 0) > 0 || (lineageNeighbors.get(t.id)?.children.length ?? 0) > 0,
+  ).length
+  /** 打开创建表单并按「接续新任务」预填（done 卡 / 详情 / 验收台共用入口）。 */
+  const openFollowUp = useCallback((taskId: string) => {
+    const source = taskById.get(taskId)
+    if (source === undefined) return
+    setCreatePrefill({ basedOn: [taskId], description: handoffPrefill(source) })
+    setCreateOpen(true)
+  }, [taskById])
+  /** 详情内跳转到另一任务（合同横幅「查看」/ 族谱节点）：复用选中态机制。 */
+  const openTaskById = useCallback((taskId: string) => {
+    setSelectedId(taskId)
+    setFocusApprovalId(null)
+  }, [])
   // 按当前账本状态划分选择集（动作只作用于各自可用子集；状态在批量期间可能已变化）
   const selectedReviewIds = tasks.filter(t => batchSelected[t.id] === true && t.status === 'review').map(t => t.id)
   const selectedArchivableIds = tasks.filter(t => batchSelected[t.id] === true && isArchivable(t.status)).map(t => t.id)
@@ -294,7 +332,16 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
         <button type="button" className={`tf-btn${batchMode ? ' tf-btn-primary' : ''}`} aria-pressed={batchMode} onClick={() => setBatchMode(mode => !mode)}>
           {batchMode ? '退出批量' : '批量操作'}
         </button>
-        <button type="button" className="tf-btn tf-btn-primary" onClick={() => setCreateOpen(true)}>+ 新建任务</button>
+        <button
+          type="button"
+          className="tf-btn"
+          disabled={lineageTaskCount === 0}
+          title="血缘视图：全量任务接续 DAG（按代分层）"
+          onClick={() => setLineageOpen(true)}
+        >
+          ⛓ 血缘
+        </button>
+        <button type="button" className="tf-btn tf-btn-primary" onClick={() => { setCreatePrefill(null); setCreateOpen(true) }}>+ 新建任务</button>
         {batchMode && (
           <span className="tf-batchbar" role="region" aria-label="批量操作">
             <span className="count">已选 {batchCount} 项{selectedReviewIds.length + selectedArchivableIds.length !== batchCount ? '（含状态已变化项，按可用动作执行）' : ''}</span>
@@ -352,37 +399,50 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
       ) : tasks.length === 0 ? (
         <EmptyBoard onCreate={() => setCreateOpen(true)} />
       ) : (
-        <div className="tf-columns">
-          {groups.map(group => (
-            <section className="tf-column" key={group.id} role="list" aria-label={group.title}>
-              <header className="tf-column-head">
-                <span>{group.title}</span>
-                <span className={`tf-column-count${group.id === 'review' && group.cards.length > 0 ? ' hot' : ''}`}>{group.cards.length}</span>
-              </header>
-              <div className="tf-column-cards">
-                {group.cards.map(card => (
-                  <TaskCard
-                    key={card.task.id}
-                    card={card}
-                    onOpen={() => setSelectedId(card.task.id)}
-                    batchMode={batchMode}
-                    selected={batchSelected[card.task.id] ?? false}
-                    onToggleSelect={() => setBatchSelected(sel => ({ ...sel, [card.task.id]: !(sel[card.task.id] ?? false) }))}
-                    onArchive={async taskId => { await dispatch({ type: 'archiveTask', taskId } as never) }}
-                  />
-                ))}
-                {group.cards.length === 0 && <div className="tf-column-empty">暂无任务</div>}
-              </div>
-            </section>
-          ))}
+        <div className="tf-board-wrap" ref={boardWrapRef}>
+          <div className="tf-columns">
+            {groups.map(group => (
+              <section className="tf-column" key={group.id} role="list" aria-label={group.title}>
+                <header className="tf-column-head">
+                  <span>{group.title}</span>
+                  <span className={`tf-column-count${group.id === 'review' && group.cards.length > 0 ? ' hot' : ''}`}>{group.cards.length}</span>
+                </header>
+                <div className="tf-column-cards">
+                  {group.cards.map(card => (
+                    <TaskCard
+                      key={card.task.id}
+                      card={card}
+                      onOpen={() => setSelectedId(card.task.id)}
+                      batchMode={batchMode}
+                      selected={batchSelected[card.task.id] ?? false}
+                      onToggleSelect={() => setBatchSelected(sel => ({ ...sel, [card.task.id]: !(sel[card.task.id] ?? false) }))}
+                      onArchive={async taskId => { await dispatch({ type: 'archiveTask', taskId } as never) }}
+                      neighbors={lineageNeighbors.get(card.task.id)}
+                      taskById={taskById}
+                      dimmed={hoverChain !== null && !hoverChain.has(card.task.id)}
+                      onHover={setHoverTaskId}
+                      onFollowUp={openFollowUp}
+                    />
+                  ))}
+                  {group.cards.length === 0 && <div className="tf-column-empty">暂无任务</div>}
+                </div>
+              </section>
+            ))}
+          </div>
+          {/* 看板连线层（血缘边在卡片上层全程可见；无血缘边不挂载，>30 条降级不画） */}
+          {lineageEdges.length > 0 && lineageEdges.length <= 30 && (
+            <LineageWireLayer edges={lineageEdges} highlight={hoverChain} taskById={taskById} wrapRef={boardWrapRef} />
+          )}
         </div>
       )}
 
       {createOpen && (
         <CreateModal
-          onClose={() => setCreateOpen(false)}
+          onClose={() => { setCreateOpen(false); setCreatePrefill(null) }}
           dispatch={dispatch}
           transport={transport}
+          tasks={tasks}
+          prefill={createPrefill}
         />
       )}
       {selected !== null && (
@@ -393,6 +453,16 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
           dispatch={dispatch}
           onRefresh={refresh}
           transport={transport}
+          tasks={tasks}
+          onOpenTask={openTaskById}
+          onFollowUp={openFollowUp}
+        />
+      )}
+      {lineageOpen && (
+        <LineageGraphModal
+          tasks={tasks}
+          onClose={() => setLineageOpen(false)}
+          onOpenTask={taskId => { setLineageOpen(false); openTaskById(taskId) }}
         />
       )}
     </div>
@@ -418,6 +488,11 @@ function TaskCard({
   selected,
   onToggleSelect,
   onArchive,
+  neighbors,
+  taskById,
+  dimmed,
+  onHover,
+  onFollowUp,
 }: {
   card: CardSummary
   onOpen: () => void
@@ -425,6 +500,12 @@ function TaskCard({
   selected: boolean
   onToggleSelect: () => void
   onArchive: (taskId: string) => Promise<void>
+  /** 血缘邻居（父/子任务 id；看板链徽标 + hover tooltip 数据源）。 */
+  neighbors: { parents: string[]; children: string[] } | undefined
+  taskById: Map<string, Task>
+  dimmed: boolean
+  onHover: (taskId: string | null) => void
+  onFollowUp: (taskId: string) => void
 }): JSX.Element {
   const { task } = card
   const blocked = task.status === 'blocked'
@@ -434,6 +515,14 @@ function TaskCard({
   // 卡片归档（2026-09-12）：两段式确认，避免误归档
   const [confirmArchive, setConfirmArchive] = useState(false)
   const [archiving, setArchiving] = useState(false)
+  // 链徽标（PLAN-FOLLOWUP）：单父=链·depth、多父=↙N、被接续追加 ↗N；tooltip 逐行列血缘
+  const parents = neighbors?.parents ?? []
+  const children = neighbors?.children ?? []
+  const chainLabel = chainBadgeLabel(parents.length, task.depth, children.length)
+  const chainTip = [
+    ...parents.map(pid => `⛓ 接续自：${taskById.get(pid)?.title ?? `${pid}（已删除）`}（${statusLabel(taskById.get(pid)?.status ?? 'done')}）`),
+    ...children.map(cid => `⛓ 被接续：${taskById.get(cid)?.title ?? `${cid}（已删除）`}（${statusLabel(taskById.get(cid)?.status ?? 'draft')}）`),
+  ].join('\n')
 
   const activate = (): void => {
     if (batchMode) {
@@ -452,13 +541,14 @@ function TaskCard({
     }
   }
 
-  const cardClass = `tf-card${archivable ? ' has-actions' : ''}${batchMode ? ' tf-batch' : ''}`
+  const cardClass = `tf-card${archivable ? ' has-actions' : ''}${batchMode ? ' tf-batch' : ''}${dimmed ? ' tf-dim' : ''}`
   return (
     <div
       role="button"
       tabIndex={0}
       className={cardClass}
       data-status={task.status}
+      data-task-id={task.id}
       onClick={activate}
       onKeyDown={event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -466,7 +556,9 @@ function TaskCard({
           activate()
         }
       }}
-      title={task.description !== '' ? task.description : task.title}
+      onMouseEnter={() => onHover(task.id)}
+      onMouseLeave={() => onHover(null)}
+      title={chainTip !== '' ? `${task.description !== '' ? task.description : task.title}\n${chainTip}` : task.description !== '' ? task.description : task.title}
       aria-label={`打开任务 ${task.title}`}
     >
       {batchMode && (
@@ -482,6 +574,16 @@ function TaskCard({
       )}
       {!batchMode && archivable && (
         <span className="tf-card-actions">
+          {task.status === 'done' && (
+            <button
+              type="button"
+              className="tf-card-mini primary"
+              title="接续新任务：以本任务为父（basedOn）创建，并预填交接摘要描述模板"
+              onClick={event => { event.stopPropagation(); onFollowUp(task.id) }}
+            >
+              接续
+            </button>
+          )}
           {confirmArchive ? (
             <>
               <button
@@ -527,6 +629,9 @@ function TaskCard({
           <span>
             <span className="tf-meta-strong">{card.doneCount}/{card.totalCount}</span> 子任务
           </span>
+        )}
+        {chainLabel !== '' && (
+          <span className="tf-chip tf-chain-chip" title={chainTip !== '' ? chainTip : undefined}>{chainLabel}</span>
         )}
         {task.round > 1 && <span className="tf-chip">第 {task.round} 轮</span>}
         {running && <span className="tf-card-spinner" aria-hidden="true" />}
@@ -595,13 +700,21 @@ function CreateModal({
   onClose,
   dispatch,
   transport,
+  tasks,
+  prefill,
 }: {
   onClose: () => void
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
   transport: TaskflowTransport
+  /** 全量任务（「继承自」候选 = done 任务；解析已选父任务标题用）。 */
+  tasks: readonly Task[]
+  /** 接续预填（done 卡 / 验收台入口）：basedOn 初始选中 + 描述模板。 */
+  prefill: { basedOn?: string[]; description?: string } | null
 }): JSX.Element {
   const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
+  const [description, setDescription] = useState(prefill?.description ?? '')
+  /** 血缘父任务（PLAN-FOLLOWUP）：可搜索多选，仅 done 任务，上限 MAX_LINEAGE_PARENTS。 */
+  const [basedOn, setBasedOn] = useState<string[]>(prefill?.basedOn ?? [])
   const [objective, setObjective] = useState('')
   const [acceptanceText, setAcceptanceText] = useState('')
   /** 执行模式（§7.1b）：胶囊滑选，默认完全权限（用户拍板 D1）。 */
@@ -696,6 +809,7 @@ function CreateModal({
       description,
       acceptance: acceptance.length > 0 ? acceptance : undefined,
       ...(objective.trim().length > 0 ? { objective: objective.trim() } : {}),
+      ...(basedOn.length > 0 ? { basedOn } : {}),
       ...(maxRounds !== null ? { maxRounds } : {}),
       pins: {
         permission: mode === 'auto' ? 'workspace-write' : 'read-only',
@@ -747,6 +861,14 @@ function CreateModal({
               <div className="tf-field">
                 <label htmlFor="tf-ac">验收标准（可选，每行一条）</label>
                 <textarea id="tf-ac" className="tf-textarea" value={acceptanceText} onChange={e => setAcceptanceText(e.target.value)} placeholder={'留空由 AI 补全，例如：\n全部测试通过\nREADME 更新使用说明'} />
+              </div>
+              <div className="tf-field">
+                <label>继承自（可选 · 从已完成任务接续）</label>
+                <LineagePicker tasks={tasks} selected={basedOn} onChange={setBasedOn} max={MAX_LINEAGE_PARENTS} />
+                {basedOn.length >= 2 && (
+                  <span className="tf-hint tf-lineage-hint">合流 ×{basedOn.length}：交接摘要将逐父独立注入，不会混合多份终检结论。</span>
+                )}
+                {basedOn.length === 1 && <span className="tf-hint">接续：上一棒任务的交接摘要将注入拆解会话。</span>}
               </div>
               <div className="tf-field">
                 <label>能力（可选）</label>
@@ -889,6 +1011,104 @@ function CreateModal({
     </div>
   )
 }
+// —— 「继承自」可搜索多选（PLAN-FOLLOWUP）：tag + 模糊过滤 + 绝对定位浮层 ——
+
+/**
+ * 血缘父任务选择器：候选仅 done 任务，按任务名 / ID 模糊过滤；
+ * 项右侧显示短 id 与状态 chip；上限 max（MAX_LINEAGE_PARENTS）。
+ * 浮层绝对定位（.tf-lineage-menu），不撑开表单；点击外部收起。
+ */
+function LineagePicker({
+  tasks,
+  selected,
+  onChange,
+  max,
+}: {
+  tasks: readonly Task[]
+  selected: string[]
+  onChange: (next: string[]) => void
+  max: number
+}): JSX.Element {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const fieldRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const onMouseDown = (event: MouseEvent): void => {
+      const target = event.target instanceof Node ? event.target : null
+      if (target !== null && fieldRef.current?.contains(target) === true) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [open])
+  const q = query.trim().toLowerCase()
+  const titleOf = new Map(tasks.map(t => [t.id, t.title]))
+  const statusOf = new Map(tasks.map(t => [t.id, t.status]))
+  const candidates = tasks
+    .filter(t => t.status === 'done' && !selected.includes(t.id))
+    .filter(t => q === '' || t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q))
+  const full = selected.length >= max
+  return (
+    <div className="tf-lineage-field" ref={fieldRef}>
+      <div
+        className="tf-lineage-box"
+        role="group"
+        aria-label="继承自父任务"
+        onClick={() => setOpen(true)}
+      >
+        {selected.map(id => (
+          <span className="tf-lineage-tag" key={id} title={titleOf.get(id) ?? id}>
+            <span>{titleOf.get(id) ?? `${id}（已删除）`}</span>
+            <button
+              type="button"
+              aria-label={`移除父任务 ${titleOf.get(id) ?? id}`}
+              onClick={event => { event.stopPropagation(); onChange(selected.filter(x => x !== id)) }}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        <input
+          className="tf-lineage-input"
+          value={query}
+          placeholder={selected.length === 0 ? '搜索已完成任务名或 ID…' : '继续添加…'}
+          aria-label="搜索父任务"
+          onFocus={() => setOpen(true)}
+          onChange={event => { setQuery(event.target.value); setOpen(true) }}
+        />
+      </div>
+      {open && (
+        <div className="tf-lineage-menu" role="listbox" aria-label="父任务候选">
+          {candidates.length === 0 && (
+            <div className="tf-lineage-empty">无匹配任务（仅列出已完成 · 支持名称/ID 模糊搜索）</div>
+          )}
+          {candidates.map(task => (
+            <button
+              key={task.id}
+              type="button"
+              role="option"
+              aria-selected={false}
+              className="tf-lineage-item"
+              disabled={full}
+              title={full ? `最多选择 ${max} 个父任务` : task.title}
+              onClick={() => { onChange([...selected, task.id]); setQuery(''); setOpen(false) }}
+            >
+              <span>{task.title}</span>
+              <span className="mid">{shortTaskId(task.id)}</span>
+              <span className="tf-status-tag" data-status={task.status}>
+                <i aria-hidden="true" />
+                {statusLabel(task.status)}
+              </span>
+            </button>
+          ))}
+          {full && <div className="tf-lineage-empty">已达上限（{max} 个父任务）。</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // —— 周期统计浮层（FR-20：吞吐 / 一次通过率 / 平均迭代轮次 / 拆解采纳率） ——
 
 /** 统计口径的口径说明（面板脚注，和数字放一起才不误导）。 */
@@ -1022,6 +1242,9 @@ function DetailModal({
   dispatch,
   onRefresh,
   transport,
+  tasks,
+  onOpenTask,
+  onFollowUp,
 }: {
   task: Task
   focusApprovalId: string | null
@@ -1029,6 +1252,12 @@ function DetailModal({
   dispatch: (action: Record<string, unknown>) => Promise<DispatchResult>
   onRefresh: () => Promise<void>
   transport: TaskflowTransport
+  /** 全量任务（合同横幅父任务标题 / 流程 tab 上一棒节点标题）。 */
+  tasks: readonly Task[]
+  /** 弹窗内跳转到另一任务（合同横幅「查看」）。 */
+  onOpenTask: (taskId: string) => void
+  /** 接续新任务（done 卡底部操作 / 验收台「确认并接续」）。 */
+  onFollowUp: (taskId: string) => void
 }): JSX.Element {
   // 默认落点（2026-09-12 口径 + 2026-09-21 流程图）：review = 等终批，落验收页
   // （验收页专注验收）；done = 验收完成，落「产物」页；in-progress = 执行中，
@@ -1054,6 +1283,24 @@ function DetailModal({
     if (!result.ok) setError(`${result.code ?? ''}: ${result.error ?? '操作失败'}`)
     await onRefresh()
   }
+
+  /** 验收台「确认并接续 →」（PLAN-FOLLOWUP）：先终批通过，成功后才打开接续预填表单；
+   *  失败不打开，错误沿用详情弹窗横幅展示。 */
+  const approveAndContinue = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    const result = await dispatch({ type: 'approveTask', taskId: task.id })
+    setBusy(false)
+    if (!result.ok) {
+      setError(`${result.code ?? ''}: ${result.error ?? '操作失败'}`)
+      return
+    }
+    await onRefresh()
+    onFollowUp(task.id)
+  }
+
+  // 「接续自」横幅数据：逐父解析标题/状态；父不存在（已删除）时灰显
+  const parentTasks = (task.parentIds ?? []).map(pid => ({ id: pid, task: tasks.find(t => t.id === pid) ?? null }))
 
   return (
     <div className="tf-overlay tf-overlay-center" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
@@ -1094,15 +1341,15 @@ function DetailModal({
         <div className={tab === 'review' || tab === 'flow' ? 'tf-modal-body tf-modal-body-fill' : 'tf-modal-body'}>
           {error !== null && <div className="tf-banner" role="alert">{error}</div>}
           <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
-          {tab === 'contract' && <ContractTab task={task} />}
-          {tab === 'flow' && <FlowTab task={task} />}
+          {tab === 'contract' && <ContractTab task={task} parents={parentTasks} onOpenTask={onOpenTask} />}
+          {tab === 'flow' && <FlowTab task={task} parents={parentTasks} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
-          {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} />}
+          {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} onApproveAndContinue={approveAndContinue} />}
           {tab === 'deliverables' && <DeliverablesTab task={task} transport={transport} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
         </div>
         <footer className="tf-modal-foot">
-          <TaskActions task={task} busy={busy} act={act} />
+          <TaskActions task={task} busy={busy} act={act} onFollowUp={onFollowUp} />
         </footer>
         {/* 底部拖拽手柄：拉高弹窗，多出的高度全给弹性块（流程 tab = 轨迹面板；验收 tab = 判定面）。 */}
         <div
@@ -1223,10 +1470,12 @@ function TaskActions({
   task,
   busy,
   act,
+  onFollowUp,
 }: {
   task: Task
   busy: boolean
   act: (action: Record<string, unknown>) => Promise<void>
+  onFollowUp: (taskId: string) => void
 }): JSX.Element {
   const [confirming, setConfirming] = useState<'cancel' | null>(null)
   return (
@@ -1265,6 +1514,17 @@ function TaskActions({
       {(task.status === 'done' || task.status === 'cancelled') && (
         <button type="button" className="tf-btn" disabled={busy} onClick={() => void act({ type: 'archiveTask' })}>归档</button>
       )}
+      {task.status === 'done' && (
+        <button
+          type="button"
+          className="tf-btn"
+          disabled={busy}
+          title="接续新任务：以本任务为父（basedOn）创建，并预填「接续「标题」（目标…；终检结论…）」描述模板"
+          onClick={() => onFollowUp(task.id)}
+        >
+          接续新任务
+        </button>
+      )}
       {!['done', 'cancelled', 'archived'].includes(task.status) && (
         confirming === 'cancel' ? (
           <>
@@ -1283,11 +1543,29 @@ function TaskActions({
 
 // 合同 tab（2026-09-22 改版：白卡三段 = 目标 / 验收标准 / 条款，视觉语言对齐
 // 验收台判定面与创建弹窗 Bento；原「键值表 + 平铺列表」退役）。
-function ContractTab({ task }: { task: Task }): JSX.Element {
+/** 合同 tab「接续自」行数据：父任务解析结果（null = 父已删除，灰显）。 */
+type ParentRef = { id: string; task: Task | null }
+
+function ContractTab({ task, parents, onOpenTask }: { task: Task; parents: ParentRef[]; onOpenTask: (taskId: string) => void }): JSX.Element {
   const refined = task.contract.sourceOfAcceptance === 'ai-refined' && task.contract.originalHumanAcceptance !== undefined
   const sourceLabel = task.contract.sourceOfAcceptance === 'human' ? '用户手写' : task.contract.sourceOfAcceptance === 'ai-drafted' ? 'AI 建议稿' : 'AI 细化'
   return (
     <>
+      {parents.length > 0 && (
+        <div className="tf-ct-lineage" role="note" aria-label="接续来源">
+          {parents.map(parent => parent.task === null ? (
+            <span className="tf-ct-lineage-row missing" key={parent.id}>
+              ⛓ 接续自：<span className="tf-ct-lineage-title">{parent.id}</span> 已删除
+            </span>
+          ) : (
+            <span className="tf-ct-lineage-row" key={parent.id}>
+              ⛓ 接续自：<span className="tf-ct-lineage-title" title={parent.task.title}>{parent.task.title}</span>
+              <span className="ok">✅ {statusLabel(parent.task.status)}</span> ·
+              <button type="button" className="tf-link-btn" onClick={() => onOpenTask(parent.id)}>查看</button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="tf-ct-card tf-ct-goal-card">
         <div className="tf-ct-head">
           <span className="tf-ct-name">目标</span>
@@ -1453,7 +1731,7 @@ function selectNode(event: { type: string; key?: string; preventDefault(): void 
   select()
 }
 
-function FlowTab({ task }: { task: Task }): JSX.Element {
+function FlowTab({ task, parents }: { task: Task; parents: ParentRef[] }): JSX.Element {
   const layout = useMemo(() => dagLayout(task), [task])
   const phases = useMemo(() => dagPhases(task), [task])
   const [selected, setSelected] = useState<DagSelection | null>(null)
@@ -1463,6 +1741,15 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
   const geo = dagGeometry(rows, totalLayers)
   const width = geo.width
   const height = geo.height
+  // 「上一棒」前置节点组（PLAN-FOLLOWUP）：有血缘时管线整体右移让位，
+  // N 个灰调只读节点在最左列纵向堆叠，虚线汇入拆解节点（上下文流入 ≠ 执行依赖）。
+  const PARENT_NODE_H = 44
+  const PARENT_GAP = 10
+  const hasParents = parents.length > 0
+  const parentShift = hasParents ? DAG_NODE_W + DAG_GAP_X + 20 : 0
+  const parentCenterY = DAG_PAD + DAG_NODE_H / 2
+  const parentTotalH = parents.length * PARENT_NODE_H + Math.max(0, parents.length - 1) * PARENT_GAP
+  const parentStartY = parentCenterY - parentTotalH / 2
   // 槽位定位：子任务层号 +1（拆解占第 0 槽）；终检/终批在 layerCount+1 / +2。
   const dagNodePos = (node: DagNode): { x: number; y: number } => geo.pos(node.layer + 1, node.index)
   const nodeById = new Map(layout.nodes.map(n => [n.sub.id, n]))
@@ -1488,13 +1775,14 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
       <div className="tf-dag-scroll">
         <svg
           className="tf-dag-svg"
-          width={width}
+          width={width + parentShift}
           height={height}
-          viewBox={`0 0 ${width} ${height}`}
+          viewBox={`0 0 ${width + parentShift} ${height}`}
           role="img"
-          aria-label={`任务执行流程图：拆解、${task.subtasks.length} 个子任务、终检、人工终批`}
+          aria-label={`任务执行流程图：${hasParents ? `上一棒（${parents.length}）、` : ''}拆解、${task.subtasks.length} 个子任务、终检、人工终批`}
         >
           <DagArrowDefs />
+          <g transform={parentShift > 0 ? `translate(${parentShift},0)` : undefined}>
           {(() => {
             // —— 相位连线：拆解 → 根（无根时直连终检）；叶子 → 终检 → 终批 ——
             // 出口侧 = 源槽位行方向；入口侧 = 目标槽位行方向。
@@ -1650,6 +1938,30 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
               </g>
             )
           })}
+          </g>
+          {hasParents && (
+            <g className="tf-dag-parents">
+              {parents.map((parent, i) => {
+                const x = DAG_PAD
+                const y = parentStartY + i * (PARENT_NODE_H + PARENT_GAP)
+                const title = parent.task?.title ?? `${parent.id}（已删除）`
+                const line = parent.task === null ? '已删除' : '🔒 只读引用 · 已交付'
+                return (
+                  <g key={parent.id} className="tf-dag-parent">
+                    <title>{`接续自「${title}」· 上一棒任务的交接摘要已注入本任务拆解会话`}</title>
+                    <path
+                      className="tf-dag-parent-edge"
+                      d={`M ${x + DAG_NODE_W} ${y + PARENT_NODE_H / 2} C ${x + DAG_NODE_W + 24} ${y + PARENT_NODE_H / 2}, ${DAG_PAD + parentShift - 24} ${parentCenterY}, ${DAG_PAD + parentShift - 8} ${parentCenterY}`}
+                      markerEnd="url(#tf-dag-arrow)"
+                    />
+                    <rect x={x} y={y} width={DAG_NODE_W} height={PARENT_NODE_H} rx={10} />
+                    <text className="tf-dag-title" x={x + 12} y={y + 18}>{truncateForDag(`⛓ ${title}`, 20)}</text>
+                    <text className="tf-dag-sub" x={x + 12} y={y + 36}>{line}</text>
+                  </g>
+                )
+              })}
+            </g>
+          )}
         </svg>
       </div>
       {selected === null
@@ -1895,11 +2207,14 @@ function ReviewTab({
   busy,
   act,
   transport,
+  onApproveAndContinue,
 }: {
   task: Task
   busy: boolean
   act: (action: Record<string, unknown>) => Promise<void>
   transport: TaskflowTransport
+  /** 验收台「确认并接续 →」（PLAN-FOLLOWUP）：终批通过成功后打开接续预填表单。 */
+  onApproveAndContinue: () => Promise<void>
 }): JSX.Element {
   const [comment, setComment] = useState('')
   const [procOpen, setProcOpen] = useState(false)
@@ -2019,14 +2334,25 @@ function ReviewTab({
       </div>
       <footer className="tf-review-foot">
         {task.status === 'review' ? (
-          <button
-            type="button"
-            className="tf-btn tf-btn-primary"
-            disabled={busy}
-            onClick={() => void act({ type: 'approveTask' })}
-          >
-            ✓ 验收通过（→ done）
-          </button>
+          <>
+            <button
+              type="button"
+              className="tf-btn tf-btn-primary"
+              disabled={busy}
+              onClick={() => void act({ type: 'approveTask' })}
+            >
+              ✓ 验收通过（→ done）
+            </button>
+            <button
+              type="button"
+              className="tf-btn"
+              disabled={busy}
+              title="终批通过后立即签下一份合同：以本任务为父（basedOn）创建接续任务并预填交接摘要"
+              onClick={() => void onApproveAndContinue()}
+            >
+              确认并接续 →
+            </button>
+          </>
         ) : task.status === 'in-progress' && (inReview.length > 0 || triaging) ? (
           <span className="tf-hint">执行中：打回批语将由 AI 定位返工范围，无需选择子任务。</span>
         ) : (
@@ -2413,6 +2739,280 @@ function ArtifactRow({
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// —— 看板血缘连线层 / 族谱视图（PLAN-FOLLOWUP，2026-09-22）——
+
+/** 线色随子任务状态：进行中=琥珀（tf-wire-active）、done=绿、其余=灰。 */
+function wireClassFor(status: TaskStatus | undefined): string {
+  if (status === 'done') return 'tf-wire tf-wire-done'
+  if (status === 'in-progress' || status === 'decomposing') return 'tf-wire tf-wire-active'
+  return 'tf-wire'
+}
+
+/**
+ * 看板血缘连线层：叠在列容器上的 SVG（.tf-wires：absolute + pointer-events:none +
+ * z-index 在卡片上层——2026-09-22 用户裁定线全程可见，防穿卡靠淡显 + hover 提亮）。
+ * 锚点规则（与 design/lineage-preview.html 定稿一致）：
+ * - 同列（左缘对齐）：父卡下缘中点 → 子卡上缘上方 6px，垂直短线；
+ * - 子卡在父卡左侧：父卡右缘中点 → 子卡右缘外 6px（bezier，箭头朝左顶住子卡）；
+ * - 子卡在父卡右侧：父卡右缘 → 子卡左缘外 6px。
+ * hover 闭包（highlight）：本链边提亮（.hl），其余淡出（.faded）。
+ */
+function LineageWireLayer({
+  edges,
+  highlight,
+  taskById,
+  wrapRef,
+}: {
+  edges: LineageEdge[]
+  highlight: ReadonlySet<string> | null
+  taskById: ReadonlyMap<string, Task>
+  wrapRef: React.RefObject<HTMLDivElement | null>
+}): JSX.Element {
+  const [geom, setGeom] = useState<{ w: number; h: number; paths: Array<{ key: string; d: string; cls: string; mode: 'hl' | 'faded' | '' }> }>({ w: 0, h: 0, paths: [] })
+
+  const recompute = useCallback(() => {
+    const wrap = wrapRef.current
+    if (wrap === null) return
+    const wrapBox = wrap.getBoundingClientRect()
+    const rectOf = (id: string): DOMRect | null => {
+      const el = wrap.querySelector(`.tf-card[data-task-id="${CSS.escape(id)}"]`)
+      return el === null ? null : el.getBoundingClientRect()
+    }
+    const paths: Array<{ key: string; d: string; cls: string; mode: 'hl' | 'faded' | '' }> = []
+    for (const edge of edges) {
+      const a = rectOf(edge.from)
+      const b = rectOf(edge.to)
+      if (a === null || b === null) continue
+      const ax = a.left - wrapBox.left
+      const ay = a.top - wrapBox.top
+      const bx = b.left - wrapBox.left
+      const by = b.top - wrapBox.top
+      const child = taskById.get(edge.to)
+      const cls = wireClassFor(child?.status)
+      const active = highlight === null ? '' : highlight.has(edge.from) && highlight.has(edge.to) ? 'hl' : 'faded'
+      let d: string
+      if (Math.abs(ax - bx) < 8) {
+        // 同列：父下缘 → 子上缘（箭头朝下顶住子卡）
+        const x = ax + a.width / 2
+        const y1 = ay + a.height
+        const y2 = by - 6
+        const mid = (y1 + y2) / 2
+        d = `M ${x} ${y1} C ${x} ${mid}, ${x} ${mid}, ${x} ${y2}`
+      } else if (bx < ax) {
+        // 子在父左侧：父右缘 → 子右缘外 6px（箭头朝左）
+        const x1 = ax + a.width
+        const y1 = ay + a.height / 2
+        const x2 = bx + b.width + 6
+        const y2 = by + b.height / 2
+        const mx = (x1 + x2) / 2
+        d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`
+      } else {
+        // 子在父右侧：父右缘 → 子左缘外 6px（箭头朝右）
+        const x1 = ax + a.width
+        const y1 = ay + a.height / 2
+        const x2 = bx - 6
+        const y2 = by + b.height / 2
+        const mx = (x1 + x2) / 2
+        d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`
+      }
+      paths.push({ key: `${edge.from}->${edge.to}`, d, cls, mode: active })
+    }
+    setGeom({ w: wrap.scrollWidth, h: wrap.scrollHeight, paths })
+  }, [edges, highlight, taskById, wrapRef])
+
+  // 重算时机：数据变化 + 看板内任意滚动（capture 捕获列内滚动）+ 尺寸变化。
+  useEffect(() => {
+    const frame = requestAnimationFrame(recompute)
+    const wrap = wrapRef.current
+    if (wrap !== null) {
+      wrap.addEventListener('scroll', recompute, { capture: true, passive: true })
+      // ResizeObserver 特性守卫：jsdom 等测试环境缺失时降级（滚动/数据变化仍触发重算）
+      if (typeof ResizeObserver === 'undefined') {
+        return () => {
+          cancelAnimationFrame(frame)
+          wrap.removeEventListener('scroll', recompute, { capture: true })
+        }
+      }
+      const observer = new ResizeObserver(recompute)
+      observer.observe(wrap)
+      return () => {
+        cancelAnimationFrame(frame)
+        wrap.removeEventListener('scroll', recompute, { capture: true })
+        observer.disconnect()
+      }
+    }
+    return () => cancelAnimationFrame(frame)
+  }, [recompute, wrapRef])
+
+  return (
+    <svg className="tf-wires" width={geom.w} height={geom.h} aria-hidden="true">
+      <defs>
+        {(['', 'tf-wire-active', 'tf-wire-done'] as const).map(cls => (
+          <marker
+            key={cls || 'plain'}
+            id={`tf-wire-arr${cls === '' ? '' : `-${cls}`}`}
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+            className={`tf-wire-arrow ${cls}`}
+          >
+            <path d="M0,0 L10,5 L0,10 L2.5,5 z" />
+          </marker>
+        ))}
+      </defs>
+      {geom.paths.map(p => (
+        <path
+          key={p.key}
+          className={`${p.cls}${p.mode === '' ? '' : ` ${p.mode}`}`}
+          d={p.d}
+          markerEnd={`url(#tf-wire-arr${p.cls.includes('active') ? '-tf-wire-active' : p.cls.includes('done') ? '-tf-wire-done' : ''})`}
+        />
+      ))}
+    </svg>
+  )
+}
+
+/** 族谱节点（HTML 绝对定位卡）：标题 + 状态 + 代际/后继计数。 */
+function LineageGraphNode({
+  task,
+  x,
+  y,
+  childCount,
+  onOpen,
+}: {
+  task: Task
+  x: number
+  y: number
+  childCount: number
+  onOpen: (taskId: string) => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="tf-gnode"
+      data-status={task.status}
+      style={{ left: x, top: y }}
+      title={`${task.title} · ${statusLabel(task.status)} · 第 ${task.depth ?? 0} 代`}
+      onClick={() => onOpen(task.id)}
+    >
+      <span className="t">{task.title}</span>
+      <span className="m">
+        {statusLabel(task.status)}
+        {` · 链·${task.depth ?? 0}`}
+        {childCount > 0 ? ` · ↗${childCount}` : ''}
+        {(task.parentIds?.length ?? 0) > 1 ? ` · ↙${task.parentIds!.length}` : ''}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * 族谱视图（工具栏「血缘」）：全量任务接续 DAG，按 depth 分层左→右铺开，
+ * 虚线 = 血缘边；点节点打开任务详情。无血缘任务不显示。
+ */
+function LineageGraphModal({
+  tasks,
+  onClose,
+  onOpenTask,
+}: {
+  tasks: readonly Task[]
+  onClose: () => void
+  onOpenTask: (taskId: string) => void
+}): JSX.Element {
+  const dialogRef = useRef<HTMLElement>(null)
+  useDialogA11y(dialogRef, onClose)
+  const edges = useMemo(() => lineageEdgesOf(tasks), [tasks])
+  const involved = useMemo(() => {
+    const ids = new Set<string>()
+    for (const edge of edges) { ids.add(edge.from); ids.add(edge.to) }
+    return tasks.filter(t => ids.has(t.id))
+  }, [tasks, edges])
+  const childCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const edge of edges) counts.set(edge.from, (counts.get(edge.from) ?? 0) + 1)
+    return counts
+  }, [edges])
+
+  // depth 分层：同代纵排；列宽/行高恒定，超出滚动（.tf-lineage-canvas）。
+  const COL_W = 260
+  const ROW_H = 92
+  const layers = useMemo(() => {
+    const byDepth = new Map<number, Task[]>()
+    for (const task of involved) {
+      const depth = task.depth ?? 0
+      const bucket = byDepth.get(depth) ?? []
+      bucket.push(task)
+      byDepth.set(depth, bucket)
+    }
+    return [...byDepth.entries()].sort((a, b) => a[0] - b[0])
+  }, [involved])
+  const posOf = useMemo(() => {
+    const pos = new Map<string, { x: number; y: number }>()
+    for (const [depth, bucket] of layers) {
+      bucket.forEach((task, i) => pos.set(task.id, { x: 28 + depth * COL_W, y: 24 + i * ROW_H }))
+    }
+    return pos
+  }, [layers])
+  const width = 28 + Math.max(1, layers.length) * COL_W
+  const height = 24 + Math.max(1, ...layers.map(([, b]) => b.length)) * ROW_H
+
+  return (
+    <div className="tf-overlay tf-overlay-center" onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+      <aside
+        className="tf-modal tf-lineage-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="血缘视图：任务接续 DAG"
+        ref={dialogRef}
+        tabIndex={-1}
+      >
+        <header className="tf-modal-head">
+          <span className="tf-modal-title">血缘视图 · 全量</span>
+          <span className="tf-chip">{involved.length} 个任务</span>
+          <button type="button" className="tf-icon-btn" onClick={onClose} aria-label="关闭">✕</button>
+        </header>
+        <div className="tf-lineage-canvas">
+          {involved.length === 0 ? (
+            <div className="tf-lineage-empty">尚无接续任务：在已完成任务的卡片上点「接续」开始一条链。</div>
+          ) : (
+            <div style={{ position: 'relative', width, height }}>
+              <svg className="tf-wires" width={width} height={height} aria-hidden="true">
+                <defs>
+                  <marker id="tf-kin-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" className="tf-wire-arrow">
+                    <path d="M0,0 L10,5 L0,10 L2.5,5 z" />
+                  </marker>
+                </defs>
+                {edges.map(edge => {
+                  const a = posOf.get(edge.from)
+                  const b = posOf.get(edge.to)
+                  if (a === undefined || b === undefined) return null
+                  const x1 = a.x + 236
+                  const y1 = a.y + 34
+                  const x2 = b.x - 6
+                  const y2 = b.y + 34
+                  const mx = (x1 + x2) / 2
+                  const d = x2 < x1
+                    ? `M ${x1} ${y1} C ${x1} ${y1 + 30}, ${x2} ${y2 - 30}, ${x2} ${y2}`
+                    : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`
+                  return <path key={`${edge.from}->${edge.to}`} className="tf-gedge" d={d} markerEnd="url(#tf-kin-arr)" />
+                })}
+              </svg>
+              {involved.map(task => {
+                const pos = posOf.get(task.id)
+                if (pos === undefined) return null
+                return <LineageGraphNode key={task.id} task={task} x={pos.x} y={pos.y} childCount={childCounts.get(task.id) ?? 0} onOpen={onOpenTask} />
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
     </div>
   )
 }

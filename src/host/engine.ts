@@ -22,7 +22,7 @@ import { resolveExecutionMode, sumTokenUsage } from '../protocol/types.ts'
 import { ArtifactPreviewError, readArtifactPreview } from './artifacts.ts'
 import { LedgerStore, LedgerWriteError } from './ledger.ts'
 import { modelLabel } from './settings.ts'
-import { renderDecomposePrompt, renderExecutionPrompt, renderFinalCheckPrompt, renderTriagePrompt } from './prompts.ts'
+import { renderDecomposePrompt, renderExecutionPrompt, renderFinalCheckPrompt, renderHandoffDigest, renderTriagePrompt, wrapUntrusted } from './prompts.ts'
 import {
   IllegalTransitionError,
   allSubtasksEvidencedOrDone,
@@ -495,13 +495,33 @@ export class TaskflowEngine {
   private async actionCreateTask(action: Extract<TaskflowAction, { type: 'createTask' }>): Promise<DispatchResult> {
     const taskId = `tf_${randomId()}`
     await this.store.mutate(ledger => {
-      const acceptance = action.acceptance?.map(item => ({ id: `ac_${randomId()}`, text: item.text })) ?? []
-      const pins: Pins = {
-        workspace: action.pins?.workspace ?? '',
-        presetId: action.pins?.presetId ?? null,
-        permission: action.pins?.permission ?? this.config.sessionDefaultPermission,
-        ...(action.pins?.executionMode !== undefined ? { executionMode: action.pins.executionMode } : {}),
+      // —— 血缘守卫（PLAN-FOLLOWUP）：父任务必须存在且 done，禁自指/重复 ——
+      // 新任务 id 刚生成，环不可能成立；此校验是防御性兜底。
+      const parents: Task[] = []
+      for (const pid of action.basedOn ?? []) {
+        if (pid === taskId) throw new GuardError('basedOn 不能包含自身。')
+        const parent = findTask(ledger, pid)
+        if (parent === null) throw new GuardError(`basedOn: 父任务 ${pid} 不存在。`)
+        if (parent.status !== 'done') {
+          throw new GuardError(`basedOn: 父任务「${parent.title}」（${pid}）尚未完成（当前 ${parent.status}），仅已完成任务可被接续。`)
+        }
+        parents.push(parent)
       }
+
+      // pins 继承：显式传入优先；缺省项以第一个父任务为准（合流冲突取第一父，§PLAN-FOLLOWUP §5）
+      const base = parents[0]?.contract.pins
+      const pins: Pins = {
+        workspace: action.pins?.workspace ?? base?.workspace ?? '',
+        presetId: action.pins?.presetId ?? base?.presetId ?? null,
+        permission: action.pins?.permission ?? base?.permission ?? this.config.sessionDefaultPermission,
+        ...(action.pins?.executionMode !== undefined
+          ? { executionMode: action.pins.executionMode }
+          : base?.executionMode !== undefined && action.pins?.workspace === undefined && action.pins?.permission === undefined
+            ? { executionMode: base.executionMode }
+            : {}),
+      }
+      const acceptance = action.acceptance?.map(item => ({ id: `ac_${randomId()}`, text: item.text })) ?? []
+      const depth = parents.length > 0 ? Math.max(...parents.map(p => p.depth ?? 0)) + 1 : 0
       const task: Task = {
         id: taskId,
         title: action.title,
@@ -527,8 +547,12 @@ export class TaskflowEngine {
         ...(action.model !== undefined ? { model: action.model } : {}),
         permissionConfirmed: !this.needsPermissionConfirm(pins),
         decomposeSessionIds: [],
+        ...(parents.length > 0 ? { parentIds: parents.map(p => p.id), depth } : {}),
       }
-      appendCreationEvent(task, '创建任务（T1）')
+      appendCreationEvent(task, parents.length > 0 ? `创建任务（T1）· 接续自 ${parents.map(p => `「${p.title}」`).join('、')}` : '创建任务（T1）')
+      if (parents.length > 0) {
+        appendTaskNote(task, { actor: 'system', kind: 'handoff', reason: renderHandoffDigest(parents) })
+      }
       ledger.tasks.push(task)
     })
     if (action.autoDecompose ?? true) {
@@ -569,10 +593,21 @@ export class TaskflowEngine {
       }
       task.decomposeSessionIds.push(sessionId)
       this.decomposeAttempts.set(taskId, attempt)
+      // 接续任务：把上一棒交接摘要注入拆解提示（逐父独立，AI 因此知道上下文从哪来）
+      const handoffParents = (task.parentIds ?? [])
+        .map(pid => findTask(ledger, pid))
+        .filter((p): p is Task => p !== null)
+      const handoffSection = handoffParents.length > 0
+        ? [
+            '',
+            '本任务是接续任务，上下文来自以下已完成任务（拆解时请把交接摘要中的交付物与遗留缺口纳入考虑）：',
+            wrapUntrusted('上一棒任务交接摘要（宿主自终检证据生成）', renderHandoffDigest(handoffParents)),
+          ].join('\n')
+        : ''
       return {
         taskId: task.id,
         sessionId,
-        prompt: renderDecomposePrompt(task),
+        prompt: renderDecomposePrompt(task) + handoffSection,
         workspace: task.contract.pins.workspace,
         presetId: task.contract.pins.presetId,
         permission: task.contract.pins.permission,

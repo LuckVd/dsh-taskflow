@@ -7,7 +7,7 @@
  * @module dsh-taskflow/host
  */
 
-import { capabilityOf } from '../protocol/types.ts'
+import { capabilityOf, HANDOFF_PARENT_SECTION_MAX_CHARS } from '../protocol/types.ts'
 import type { Evidence, ExecutionMode, Subtask, Task } from '../protocol/types.ts'
 
 export const TOOL_SUBMIT_EVIDENCE = 'taskflow_submit_evidence'
@@ -246,4 +246,45 @@ export function renderTriagePrompt(task: Task, comment: string): string {
 function firstLine(text: string): string {
   const line = text.split('\n')[0] ?? ''
   return line.length > 120 ? `${line.slice(0, 120)}…` : line
+}
+
+// —— 任务接续 / 血缘（PLAN-FOLLOWUP）——
+
+/**
+ * 交接摘要：接续任务的「上一棒」上下文。**逐父独立分节，永不合并**——
+ * 多个父任务的终检结论可能矛盾，融合后无法解释 AI 拆解依据（§PLAN-FOLLOWUP §3）。
+ * 单父章节超 {@link HANDOFF_PARENT_SECTION_MAX_CHARS} 字符截断。
+ */
+export function renderHandoffDigest(parents: readonly Task[]): string {
+  return parents.map(parent => {
+    const evidence = parent.evidence
+    const passed = evidence === undefined ? 0 : evidence.selfCheck.filter(c => c.verdict === 'pass').length
+    const total = evidence?.selfCheck.length ?? 0
+    const gaps = evidence === undefined
+      ? []
+      : evidence.selfCheck.filter(c => c.verdict !== 'pass').map(c => `验收项 ${c.acceptanceId}：${c.verdict}（${c.note}）`)
+    const artifacts = (evidence?.artifacts ?? [])
+      .map(a => `    - ${a.path}${a.description === undefined ? '' : `（${a.description}）`}`)
+      .join('\n')
+    const section = [
+      `【父任务】${parent.title}（${parent.id}，终批通过）`,
+      `  目标：${parent.contract.objective}`,
+      evidence === undefined
+        ? '  终检证据：无（历史任务，仅有验收结论）'
+        : [
+            `  终检结论：自检 ${passed}/${total} 通过`,
+            `  交付摘要：${firstLine(evidence.changesSummary)}`,
+            artifacts.length > 0 ? `  交付物：\n${artifacts}` : '  交付物：未声明',
+            gaps.length > 0 ? `  遗留缺口（本期可关注）：\n    - ${gaps.join('\n    - ')}` : '  遗留缺口：无',
+          ].join('\n'),
+    ].join('\n')
+    return section.length > HANDOFF_PARENT_SECTION_MAX_CHARS
+      ? `${section.slice(0, HANDOFF_PARENT_SECTION_MAX_CHARS)}…（超限截断）`
+      : section
+  }).join('\n\n')
+}
+
+/** 接续任务的拆解提示是否需要注入交接摘要。 */
+export function hasLineage(task: Pick<Task, 'parentIds'>): boolean {
+  return (task.parentIds?.length ?? 0) > 0
 }

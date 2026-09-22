@@ -221,3 +221,62 @@ describe('E2E 审批模式：提权审批两档裁决（§7.1b）', () => {
     }
   })
 })
+
+describe('E2E 接续：done → 接续新任务 → 自动拆解 → 再终批（PLAN-FOLLOWUP）', () => {
+  it('血缘接续全链路：两棒连续履约，交接摘要进拆解会话', async () => {
+    const dir = await tempDir('taskflow-e2e-fu-')
+    try {
+      const box: { engine?: TaskflowEngine } = {}
+      const adapter = new MockSessionAdapter({ getLedger: () => box.engine!.getState().ledger })
+      const engine = new TaskflowEngine(
+        new LedgerStore(path.join(dir, 'ledger.json')),
+        adapter,
+        DEFAULT_ENGINE_CONFIG,
+      )
+      box.engine = engine
+      await engine.boot()
+
+      // ── 第一棒：主链路到 done ──
+      const first = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'fu-first',
+        title: '实现会话持久化',
+        description: '会话重启后可恢复，落库与恢复逻辑。',
+      })
+      expect(first.ok, JSON.stringify(first)).toBe(true)
+      const parent = first.taskId!
+      await waitFor(() => ledgerOf(engine).tasks.find(t => t.id === parent)?.status === 'review')
+      const approved = await engine.dispatch({ type: 'approveTask', requestId: 'fu-first-approve', taskId: parent })
+      expect(approved.ok).toBe(true)
+
+      // ── 第二棒：done 卡接续 → 自动拆解 → 完成 → 终批 ──
+      const second = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'fu-second',
+        title: '续做：会话持久化性能优化',
+        description: '接续上一棒，压测并优化恢复路径。',
+        basedOn: [parent],
+      })
+      expect(second.ok, JSON.stringify(second)).toBe(true)
+      const childId = second.taskId!
+      // 血缘落库 + 交接留痕
+      const childDraft = ledgerOf(engine).tasks.find(t => t.id === childId)!
+      expect(childDraft.parentIds).toEqual([parent])
+      expect(childDraft.depth).toBe(1)
+      expect(childDraft.events.some(e => e.kind === 'handoff')).toBe(true)
+      // 拆解会话拿到了上一棒上下文
+      const decomposeInput = adapter.decomposeRuns.find(r => r.taskId === childId)
+      expect(decomposeInput).toBeDefined()
+      expect(decomposeInput!.prompt).toContain('实现会话持久化')
+      // 走完第二棒主链路
+      await waitFor(() => ledgerOf(engine).tasks.find(t => t.id === childId)?.status === 'review')
+      const approved2 = await engine.dispatch({ type: 'approveTask', requestId: 'fu-second-approve', taskId: childId })
+      expect(approved2.ok).toBe(true)
+      expect(ledgerOf(engine).tasks.find(t => t.id === childId)?.status).toBe('done')
+      // 第一棒不受影响：仍是 done（新合同不污染老合同）
+      expect(ledgerOf(engine).tasks.find(t => t.id === parent)?.status).toBe('done')
+    } finally {
+      await cleanup(dir)
+    }
+  })
+})

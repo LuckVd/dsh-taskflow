@@ -606,6 +606,77 @@ export const TASKFLOW_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .tf-root *, .tf-card, .tf-btn, .tf-progress-bar { animation: none !important; transition: none !important; }
 }
+
+/* —— 任务接续 / 血缘（PLAN-FOLLOWUP）—— */
+/* hover 链高亮：链外卡片压暗（连线层同步把无关边淡出） */
+.tf-card.tf-dim { opacity: 0.18; }
+/* 卡片链徽标（meta 行）：血缘用主题蓝底药丸，与状态/轮次 chip 区分 */
+.tf-chain-chip { background: ${V.businessTertiary}; color: ${V.business}; font-weight: 600; white-space: nowrap; }
+/* done 卡第二个右上角操作（接续新任务）：操作区按两按钮让位 */
+.tf-card.has-actions .tf-card-title, .tf-card.has-actions .tf-card-desc { padding-right: 128px; }
+
+/* 看板连线层：绝对定位 SVG 覆盖列区，线在卡片上层（用户裁定全程可见），pointer-events 穿透 */
+.tf-board-wrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tf-board-wrap > .tf-columns { flex: 1; min-height: 0; }
+.tf-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.tf-wire { fill: none; stroke: ${V.label3}; stroke-width: 1.8; stroke-dasharray: 5 4; opacity: 0.55; }
+.tf-wire-active { stroke: ${V.warn}; }
+.tf-wire-done { stroke: ${V.inkGreen}; }
+.tf-wire path { fill: none; }
+/* hover 高亮态：本链实、链外淡（JS 按 data-chain 归属切换 opacity） */
+.tf-wire.hl { opacity: 1; }
+.tf-wire.faded { opacity: 0.12; }
+.tf-wire-arrow { fill: ${V.label3}; }
+.tf-wire-arrow.tf-wire-active { fill: ${V.warn}; }
+.tf-wire-arrow.tf-wire-done { fill: ${V.inkGreen}; }
+
+/* 创建表单「继承自」可搜索多选：tag + 输入 + 绝对定位浮层（不撑开表单） */
+.tf-lineage-field { position: relative; }
+.tf-lineage-box { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 38px; padding: 5px 8px; background: ${V.bgBase}; border: 1px solid ${V.borderL3}; border-radius: 8px; cursor: text; transition: border-color 120ms ease; }
+.tf-lineage-box:focus-within { border-color: ${V.business}; }
+.tf-lineage-tag { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 2px 4px 2px 9px; font-size: 12px; font-weight: 500; color: ${V.label}; background: ${V.businessTertiary}; border-radius: 6px; }
+.tf-lineage-tag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-lineage-tag button { flex: none; min-width: 18px; min-height: 18px; border-radius: 999px; font-size: 10px; line-height: 1; color: ${V.label3}; }
+.tf-lineage-tag button:hover { color: ${V.errorSecondary}; background: ${V.bgHover}; }
+.tf-lineage-input { flex: 1 1 120px; min-width: 110px; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: ${V.label}; padding: 3px 2px; }
+.tf-lineage-input::placeholder { color: ${V.label3}; }
+.tf-lineage-menu { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; max-height: 240px; overflow-y: auto; background: ${V.bgBase}; border: 1px solid ${V.borderL2}; border-radius: 10px; box-shadow: ${V.shadow3}; scrollbar-width: thin; }
+.tf-lineage-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 8px 11px; font-size: 12.5px; color: ${V.label}; border-top: 1px solid ${V.borderL1}; }
+.tf-lineage-item:first-child { border-top: none; }
+.tf-lineage-item:hover:not(:disabled) { background: ${V.bgHover}; }
+.tf-lineage-item:disabled { opacity: 0.5; cursor: default; }
+.tf-lineage-item .mid { margin-left: auto; flex: none; font-family: ${V.codeFont}; font-size: 11px; color: ${V.label3}; font-variant-numeric: tabular-nums; }
+.tf-lineage-empty { padding: 9px 11px; font-size: 11.5px; color: ${V.caption}; }
+.tf-lineage-hint { color: ${V.business}; }
+
+/* 合同 tab「接续自」横幅：标题区下方逐父一行 */
+.tf-ct-lineage { display: flex; flex-direction: column; gap: 6px; }
+.tf-ct-lineage-row { display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%; padding: 5px 11px; font-size: 12.5px; color: ${V.business}; background: ${V.businessTertiary}; border-radius: 8px; }
+.tf-ct-lineage-row .tf-ct-lineage-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-ct-lineage-row .ok { color: ${V.inkGreen}; flex: none; }
+.tf-ct-lineage-row .tf-link-btn { flex: none; }
+.tf-ct-lineage-row.missing { color: ${V.label3}; background: ${V.bgLayer2}; }
+
+/* 流程 tab「上一棒」前置节点组（灰调只读引用，虚线汇入拆解药丸） */
+.tf-dag-parent > rect { fill: ${V.bgLayer2}; stroke: ${V.borderL2}; stroke-width: 1.4; stroke-dasharray: 5 4; }
+.tf-dag-parent > text { font-family: ${V.font}; fill: ${V.label2}; }
+.tf-dag-parent-edge { fill: none; stroke: ${V.borderL2}; stroke-width: 1.8; stroke-dasharray: 5 4; opacity: 0.75; }
+.tf-dag-lock { font-size: 10px; fill: ${V.label3}; }
+
+/* 族谱视图（全量血缘 DAG 弹层） */
+.tf-lineage-modal { width: min(1120px, 100%); height: min(760px, 100%); }
+.tf-lineage-canvas { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
+.tf-gnode { position: absolute; width: 190px; display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; text-align: left; background: ${V.bgBase}; border: 1px solid ${V.borderL2}; border-radius: 10px; cursor: pointer; transition: box-shadow 120ms ease; }
+.tf-gnode:hover { box-shadow: ${V.shadow2}; }
+.tf-gnode .t { font-size: 12.5px; font-weight: 600; color: ${V.label}; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tf-gnode .m { font-size: 11px; color: ${V.label3}; font-variant-numeric: tabular-nums; }
+.tf-gnode[data-status='done'] { border-color: ${V.inkGreen}; }
+.tf-gnode[data-status='done'] .t { color: ${V.inkGreen}; }
+.tf-gnode[data-status='in-progress'], .tf-gnode[data-status='decomposing'] { border-color: ${V.warn}; }
+.tf-gnode[data-status='in-progress'] .t, .tf-gnode[data-status='decomposing'] .t { color: ${V.warnLabel}; }
+.tf-gnode[data-status='review'] { border-color: ${V.business}; }
+.tf-gnode[data-status='blocked'] { border-color: ${V.errorSecondary}; }
+.tf-gedge { fill: none; stroke: ${V.borderL3}; stroke-width: 1.8; stroke-dasharray: 5 4; opacity: 0.7; }
 `
 
 let injected = false

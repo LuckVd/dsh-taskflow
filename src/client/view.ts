@@ -555,4 +555,85 @@ export function decimalOf(value: number | null): string {
   return value.toFixed(1)
 }
 
+// —— 任务接续 / 血缘（PLAN-FOLLOWUP 客户端投影）——
+
+/** 一条血缘边：from = 父任务，to = 接续创建的子任务。 */
+export interface LineageEdge {
+  from: string
+  to: string
+}
+
+/** 全量血缘边（跳过 archived 两端——归档卡不在看板/族谱出现）。 */
+export function lineageEdgesOf(tasks: readonly Task[]): LineageEdge[] {
+  const visible = new Set(tasks.filter(t => t.status !== 'archived').map(t => t.id))
+  const edges: LineageEdge[] = []
+  for (const task of tasks) {
+    if (task.status === 'archived') continue
+    for (const parent of task.parentIds ?? []) {
+      if (visible.has(parent)) edges.push({ from: parent, to: task.id })
+    }
+  }
+  return edges
+}
+
+/** id → 直系血缘邻居（父 / 子任务 id 列表；仅统计非 archived 任务）。 */
+export function lineageNeighborsOf(tasks: readonly Task[]): Map<string, { parents: string[]; children: string[] }> {
+  const map = new Map<string, { parents: string[]; children: string[] }>()
+  const ensure = (id: string): { parents: string[]; children: string[] } => {
+    let entry = map.get(id)
+    if (entry === undefined) {
+      entry = { parents: [], children: [] }
+      map.set(id, entry)
+    }
+    return entry
+  }
+  for (const task of tasks) {
+    if (task.status === 'archived') continue
+    for (const parent of task.parentIds ?? []) {
+      if (!tasks.some(t => t.id === parent && t.status !== 'archived')) continue
+      ensure(parent).children.push(task.id)
+      ensure(task.id).parents.push(parent)
+    }
+  }
+  return map
+}
+
+/** 血缘闭包（hover 高亮用）：自身 ∪ 全部祖先 ∪ 全部后继。 */
+export function lineageClosure(id: string, edges: readonly LineageEdge[]): Set<string> {
+  const result = new Set<string>([id])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const edge of edges) {
+      if (result.has(edge.from) && !result.has(edge.to)) { result.add(edge.to); grew = true }
+      if (result.has(edge.to) && !result.has(edge.from)) { result.add(edge.from); grew = true }
+    }
+  }
+  return result
+}
+
+/**
+ * 看板卡片的链徽标文案（meta 行）：
+ * 单父 = `⛓ 链·<depth>`；多父合流 = `⛓ ↙N`；被别人接续（是父）追加 `⛓ ↗N`。
+ * 无血缘返回空串（不渲染）。
+ */
+export function chainBadgeLabel(parentCount: number, depth: number | undefined, childCount: number): string {
+  if (parentCount === 0 && childCount === 0) return ''
+  let label = parentCount > 1 ? `⛓ ↙${parentCount}` : `⛓ 链·${depth ?? 0}`
+  if (childCount > 0) label += ` ⛓ ↗${childCount}`
+  return label
+}
+
+/** done 卡「接续新任务」的描述预填模板（逐父一期一句；证据缺失时给占位）。 */
+export function handoffPrefill(task: Task): string {
+  const objective = task.contract.objective.trim()
+  const conclusion = task.evidence?.changesSummary.split('\n').map(l => l.trim()).find(l => l.length > 0) ?? '（无终检结论）'
+  return `接续「${task.title}」（目标：${objective === '' ? '（未填写）' : objective}；终检结论：${conclusion}）。本期继续：`
+}
+
+/** 任务 id 的短形态（候选/徽标 tooltip 展示）：去 tf_ 前缀取前 8 位。 */
+export function shortTaskId(id: string): string {
+  return id.replace(/^tf_/, '').slice(0, 8)
+}
+
 export type { Ledger }

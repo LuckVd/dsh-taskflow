@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>血缘 DAG · 预览稿（临时）</title>
+<style>
+  :root{
+    --bgBase:#141517; --bgLayer2:#1c1e21; --bgLayer3:#24272b; --bgHover:#2b2f34;
+    --borderL1:#2e3237; --borderL2:#3a3f45; --borderL3:#4a5057;
+    --label:#e8eaed; --label2:#b6babf; --label3:#8a9097; --caption:#5f666d;
+    --ok:#4caf7d; --warn:#d9a03f; --accent:#5b9dd9; --danger:#d96b6b;
+    --accentOk:#3f5a4c; --accentWarn:#5a4b33; --accentInfo:#3a4c5e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bgBase);color:var(--label);font:14px/1.5 -apple-system,"PingFang SC","Segoe UI",sans-serif;height:100vh;overflow:hidden}
+  .switcher{position:fixed;top:10px;right:14px;z-index:99;display:flex;gap:8px}
+  .switcher button{background:var(--bgLayer3);color:var(--label2);border:1px solid var(--borderL2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:12px}
+  .switcher button.on{background:var(--accentInfo);color:#fff;border-color:var(--accent)}
+  .scene{display:none;height:100vh}
+  body[data-scene="board"] #s-board{display:block}
+  body[data-scene="flow"] #s-flow{display:flex}
+  body[data-scene="graph"] #s-graph{display:flex}
+  body[data-scene="form"] #s-form{display:flex}
+
+  /* ============ 看板 ============ */
+  #s-board{padding:52px 20px 20px}
+  .board-title{font-size:13px;color:var(--label3);margin-bottom:10px;display:flex;gap:14px;align-items:center}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--label3)}
+  .legend i{display:inline-block;width:22px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px;border-radius:2px}
+  .columns{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;height:calc(100vh - 110px)}
+  .column{display:flex;flex-direction:column;background:var(--bgLayer2);border:1px solid var(--borderL1);border-radius:12px;padding:8px;overflow:hidden}
+  .col-head{display:flex;align-items:center;gap:8px;padding:6px;font-size:13px;font-weight:600;color:var(--label2)}
+  .col-count{font-size:11px;padding:0 7px;border-radius:999px;background:var(--bgHover);color:var(--label3)}
+  .cards{display:flex;flex-direction:column;gap:8px;overflow-y:auto;padding:2px}
+  .card{position:relative;background:var(--bgBase);border-radius:8px;padding:10px 12px 10px 15px;box-shadow:0 1px 3px rgba(0,0,0,.4);cursor:pointer;transition:opacity .15s, box-shadow .15s}
+  .card::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:999px;background:var(--caption);opacity:.6}
+  .card[data-status="in-progress"]::before,.card[data-status="decomposing"]::before{background:var(--warn);opacity:1}
+  .card[data-status="done"]::before{background:var(--ok);opacity:1}
+  .card[data-status="review"]::before{background:var(--accent);opacity:1}
+  .card .title{font-weight:600;font-size:13.5px;margin-bottom:4px}
+  .card .meta{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--label3)}
+  .st{padding:1px 8px;border-radius:999px;font-size:11px}
+  .st.done{color:#8fd4b0;background:var(--accentOk)}
+  .st.in-progress{color:#ecc788;background:var(--accentWarn)}
+  .st.draft{color:var(--label3);background:var(--bgHover)}
+  .chain{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--accent);background:var(--accentInfo);padding:1px 8px;border-radius:999px}
+  .dim{opacity:.18}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
+
+  /* ============ 详情弹窗（流程 tab / 族谱 / 表单共用框） ============ */
+  #s-flow,#s-graph,#s-form{align-items:center;justify-content:center;background:var(--bgBase);padding-top:40px}
+  .modal{width:960px;max-width:94vw;height:calc(100vh - 90px);background:var(--bgLayer2);border:1px solid var(--borderL1);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.5)}
+  .m-head{padding:14px 20px 0;flex:none}
+  .m-title{font-size:16px;font-weight:700}
+  .crumb{display:flex;flex-direction:column;gap:4px;margin-top:8px}
+  .crumb a{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);text-decoration:none;background:var(--accentInfo);border-radius:8px;padding:5px 10px;width:fit-content}
+  .crumb a .ok{color:#8fd4b0}
+  .tabs{display:flex;gap:2px;margin-top:12px;border-bottom:1px solid var(--borderL1)}
+  .tab{padding:8px 14px;font-size:13px;color:var(--label3);cursor:pointer}
+  .tab.on{color:var(--label);box-shadow:inset 0 -2px 0 var(--accent)}
+  .m-body{flex:1;overflow:auto;padding:18px 20px}
+  .info-bar{display:flex;gap:14px;font-size:12px;color:var(--label3);margin-bottom:14px}
+
+  /* 流程图 */
+  .pipeline{display:flex;align-items:stretch;gap:0;position:relative}
+  .ph{flex:1;background:var(--bgLayer3);border:1px solid var(--borderL2);border-radius:10px;padding:10px 12px;min-height:74px;position:relative}
+  .ph .ph-t{font-size:12.5px;font-weight:600}
+  .ph .ph-s{font-size:11px;color:var(--label3);margin-top:3px}
+  .ph.done{border-color:var(--accentOk)} .ph.done .ph-t{color:#8fd4b0}
+  .ph.running{border-color:var(--accentWarn)} .ph.running .ph-t{color:#ecc788}
+  .ph.parents{background:transparent;border:none;padding:0;display:flex;flex-direction:column;gap:10px;flex:1.2}
+  .ph .parent{background:var(--bgHover);border:1px dashed var(--borderL3);border-radius:10px;padding:8px 10px;flex:1}
+  .ph .parent .ph-t{color:var(--label2);font-weight:500}
+  .ph .parent .lk{font-size:10px;color:var(--caption)}
+  .conn{flex:none;width:34px;position:relative}
+  .conn svg{position:absolute;inset:0;width:100%;height:100%}
+  .pill-row{display:flex;gap:8px;margin:14px 0 10px;flex-wrap:wrap}
+  .sub{background:var(--bgLayer3);border:1px solid var(--borderL2);border-radius:10px;padding:10px 12px}
+  .sub .ph-t{font-size:12.5px}
+  .handoff{margin-top:18px;border:1px solid var(--borderL2);border-radius:10px;background:var(--bgLayer3);padding:12px 14px}
+  .handoff h4{font-size:12.5px;color:var(--label2);margin-bottom:6px}
+  .handoff p{font-size:12px;color:var(--label3);margin:3px 0}
+  .handoff b{color:var(--label2);font-weight:600}
+
+  /* 族谱 */
+  .gnode{position:absolute;width:190px;background:var(--bgLayer3);border:1px solid var(--borderL2);border-radius:10px;padding:9px 11px}
+  .gnode .t{font-size:12.5px;font-weight:600}
+  .gnode .m{font-size:11px;color:var(--label3);margin-top:2px}
+  .gnode.done{border-color:var(--accentOk)} .gnode.done .t{color:#8fd4b0}
+  .gnode.run{border-color:var(--accentWarn)}
+  .gnode.cur{outline:2px solid var(--accent);outline-offset:1px}
+
+  /* 表单场景 */
+  .f-row{margin-bottom:16px}
+  .f-row label{display:block;font-size:12.5px;color:var(--label2);margin-bottom:6px}
+  .f-input,.f-area{width:100%;background:var(--bgBase);border:1px solid var(--borderL2);border-radius:8px;color:var(--label);padding:9px 11px;font-size:13px}
+  .f-area{min-height:64px;resize:vertical}
+  .pick{display:flex;flex-direction:column;gap:6px}
+  .ms{position:relative}
+  .ms-box{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--bgBase);border:1px solid var(--accent);border-radius:8px;padding:6px 8px}
+  .ms-box .tag{display:inline-flex;align-items:center;gap:5px;background:var(--accentInfo);color:var(--label);font-size:12px;border-radius:6px;padding:2px 8px}
+  .ms-box .tag .x{font-style:normal;color:var(--label3);cursor:pointer;font-size:11px}
+  .ms-input{flex:1;min-width:140px;background:transparent;border:none;color:var(--label);font-size:13px;outline:none;padding:3px 2px}
+  .ms-menu{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:10;background:var(--bgLayer3);border:1px solid var(--borderL2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);overflow:hidden}
+  .ms-item{display:flex;align-items:center;gap:9px;padding:8px 11px;font-size:12.5px;cursor:pointer;border-bottom:1px solid var(--borderL1)}
+  .ms-item:hover{background:var(--bgHover)}
+  .ms-item.sel{background:var(--accentInfo)}
+  .ms-item .mid{margin-left:auto;color:var(--caption);font-size:11px;font-variant-numeric:tabular-nums}
+  .ms-empty{padding:8px 11px;font-size:11.5px;color:var(--caption)}
+  .cb{width:15px;height:15px;border-radius:4px;border:1.5px solid var(--borderL3);display:inline-block;flex:none}
+  .ms-item.sel .cb{background:var(--accent);border-color:var(--accent)}
+  .f-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+  .btn{border:none;border-radius:8px;padding:8px 18px;font-size:13px;cursor:pointer}
+  .btn.pri{background:var(--accent);color:#fff}
+  .btn.gho{background:var(--bgLayer3);color:var(--label2)}
+  .hint{font-size:11.5px;color:var(--caption);margin-top:6px}
+  .donebar{display:flex;gap:8px;justify-content:flex-end;padding:12px 20px;border-top:1px solid var(--borderL1);flex:none}
+</style>
+</head>
+<body data-scene="board">
+<div class="switcher">
+  <button data-s="board" class="on">① 看板连线</button>
+  <button data-s="flow">② 流程 tab · 多父汇入</button>
+  <button data-s="graph">③ 族谱视图</button>
+  <button data-s="form">④ 接续表单</button>
+</div>
+
+<!-- ① 看板 -->
+<div class="scene" id="s-board">
+  <div class="board-title">看板 · 血缘连线（T1 一拖二分叉 → T4 二合一合流）hover 任一卡片高亮本链
+    <span class="legend"><span><i style="border-color:var(--ok)"></i>已交付</span><span><i style="border-color:var(--warn)"></i>进行中</span><span><i style="border-color:var(--caption);border-top-style:dashed"></i>血缘（淡显）</span></span>
+  </div>
+  <div style="position:relative;height:calc(100vh - 110px)">
+  <div class="columns" id="columns" style="height:100%">
+    <div class="column"><div class="col-head">待办 <span class="col-count">1</span></div>
+      <div class="cards">
+        <div class="card" data-status="draft" data-id="T4" data-chain="c2" style="margin-top:320px">
+          <div class="title">集成登录与看板改造</div>
+          <div class="meta"><span class="st draft">草稿</span><span class="chain">⛓ ↙2</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="column"><div class="col-head">实现中 <span class="col-count">1</span></div>
+      <div class="cards">
+        <div class="card" data-status="decomposing" data-id="T5" data-chain="c1" style="margin-top:180px">
+          <div class="title">续做：导出报表性能优化</div>
+          <div class="meta"><span class="st in-progress">拆解中</span><span class="chain">⛓ 链·2</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="column"><div class="col-head">待验收 <span class="col-count">1</span></div>
+      <div class="cards">
+        <div class="card" data-status="review" data-id="T6" data-chain="c3">
+          <div class="title">修复会话超时</div>
+          <div class="meta"><span class="st in-progress" style="color:#9ec3e8;background:var(--accentInfo)">待验收</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="column"><div class="col-head">已完成 <span class="col-count">3</span></div>
+      <div class="cards">
+        <div class="card" data-status="done" data-id="T1" data-chain="c1 c2">
+          <div class="title">实现会话持久化</div>
+          <div class="meta"><span class="st done">已完成</span><span class="chain">⛓ ↗2</span></div>
+        </div>
+        <div class="card" data-status="done" data-id="T2" data-chain="c1 c2">
+          <div class="title">导出报表基础版</div>
+          <div class="meta"><span class="st done">已完成</span><span class="chain">⛓ 链·2</span></div>
+        </div>
+        <div class="card" data-status="done" data-id="T3" data-chain="c2">
+          <div class="title">看板组件改造</div>
+          <div class="meta"><span class="st done">已完成</span><span class="chain">⛓ 链·2</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <svg class="wires" id="wires"></svg>
+  </div>
+</div>
+
+<!-- ② 流程 tab -->
+<div class="scene" id="s-flow">
+  <div class="modal">
+    <div class="m-head">
+      <div class="m-title">集成登录与看板改造</div>
+      <div class="crumb">
+        <a href="#">⛓ 接续自：导出报表基础版 <span class="ok">✅ 已完成 · 终批 09-22 14:30</span> · 查看</a>
+        <a href="#">⛓ 接续自：看板组件改造 <span class="ok">✅ 已完成 · 终批 09-22 16:02</span> · 查看</a>
+      </div>
+      <div class="tabs"><span class="tab">合同</span><span class="tab on">流程</span><span class="tab">子任务</span><span class="tab">交付物</span></div>
+    </div>
+    <div class="m-body">
+      <div class="info-bar"><span>执行中 · 12m</span><span>Token 38.2k</span><span>合流 ×2</span></div>
+      <div class="pipeline">
+        <div class="ph parents">
+          <div class="parent"><div class="ph-t">⛓ 导出报表基础版</div><div class="ph-s"><span class="lk">🔒 只读引用 · 已交付</span></div></div>
+          <div class="parent"><div class="ph-t">⛓ 看板组件改造</div><div class="ph-s"><span class="lk">🔒 只读引用 · 已交付</span></div></div>
+        </div>
+        <div class="conn"><svg viewBox="0 0 34 100" preserveAspectRatio="none">
+          <path d="M0 25 C 20 25, 20 50, 34 50" fill="none" stroke="var(--borderL3)" stroke-width="2" stroke-dasharray="5 4"/>
+          <path d="M0 75 C 20 75, 20 50, 34 50" fill="none" stroke="var(--borderL3)" stroke-width="2" stroke-dasharray="5 4"/>
+          <path d="M30 46 l6 4 -6 4" fill="none" stroke="var(--borderL3)" stroke-width="2"/>
+        </svg></div>
+        <div class="ph done"><div class="ph-t">拆解</div><div class="ph-s">✓ 完成 · 4 子任务 · 3m</div></div>
+        <div class="conn"><svg viewBox="0 0 34 100" preserveAspectRatio="none"><path d="M0 50 L34 50" stroke="var(--accentOk)" stroke-width="2"/><path d="M28 46 l6 4 -6 4" fill="none" stroke="var(--accentOk)" stroke-width="2"/></svg></div>
+        <div class="ph done"><div class="ph-t">子任务执行</div><div class="ph-s">4/4 完成 · 9m</div></div>
+        <div class="conn"><svg viewBox="0 0 34 100" preserveAspectRatio="none"><path d="M0 50 L34 50" stroke="var(--accentOk)" stroke-width="2"/><path d="M28 46 l6 4 -6 4" fill="none" stroke="var(--accentOk)" stroke-width="2"/></svg></div>
+        <div class="ph done"><div class="ph-t">终检</div><div class="ph-s">✓ 证据卡已产出</div></div>
+        <div class="conn"><svg viewBox="0 0 34 100" preserveAspectRatio="none"><path d="M0 50 L34 50" stroke="var(--warn)" stroke-width="2" stroke-dasharray="2 3"/><path d="M28 46 l6 4 -6 4" fill="none" stroke="var(--warn)" stroke-width="2"/></svg></div>
+        <div class="ph running"><div class="ph-t">人工终批</div><div class="ph-s">等待验收人</div></div>
+      </div>
+      <div class="pill-row">
+        <div class="sub" style="flex:1"><div class="ph-t">✓ 后端：合并登录态</div></div>
+        <div class="sub" style="flex:1"><div class="ph-t">✓ 前端：看板接入新会话</div></div>
+        <div class="sub" style="flex:1"><div class="ph-t">✓ 联调</div></div>
+        <div class="sub" style="flex:1"><div class="ph-t">✓ 证据整理</div></div>
+      </div>
+      <div class="handoff">
+        <h4>交接摘要（AI 拆解依据 · 逐父独立）</h4>
+        <p><b>来自「导出报表基础版」</b>：目标——实现 CSV 导出；交付物 <b>src/host/report.ts</b> 等 2 文件；终检 3/3 通过；遗留：性能未压测。</p>
+        <p><b>来自「看板组件改造」</b>：目标——列组件化；交付物 <b>src/client/Board.tsx</b>；终检 4/4 通过；无遗留。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ③ 族谱 -->
+<div class="scene" id="s-graph">
+  <div class="modal">
+    <div class="m-head"><div class="m-title">血缘视图 · 全量</div>
+      <div class="tabs"><span class="tab on">族谱</span></div></div>
+    <div class="m-body" style="position:relative;min-height:400px">
+      <svg style="position:absolute;inset:0;width:100%;height:100%">
+        <path d="M250 80 C 320 80, 320 170, 390 170" fill="none" stroke="var(--borderL3)" stroke-width="1.8" stroke-dasharray="5 4"/>
+        <path d="M250 80 C 320 80, 320 340, 390 340" fill="none" stroke="var(--borderL3)" stroke-width="1.8" stroke-dasharray="5 4"/>
+        <path d="M580 170 C 650 170, 650 120, 720 120" fill="none" stroke="var(--borderL3)" stroke-width="1.8" stroke-dasharray="5 4"/>
+        <path d="M580 340 C 650 340, 650 160, 720 160" fill="none" stroke="var(--borderL3)" stroke-width="1.8" stroke-dasharray="5 4"/>
+        <path d="M580 170 C 650 170, 650 262, 660 262 L 660 420 L 720 420" fill="none" stroke="var(--borderL3)" stroke-width="1.8" stroke-dasharray="5 4"/>
+      </svg>
+      <div class="gnode done" style="left:60px;top:44px"><div class="t">实现会话持久化</div><div class="m">✅ done · 链·1 · ↗2</div></div>
+      <div class="gnode done cur" style="left:390px;top:134px"><div class="t">导出报表基础版</div><div class="m">✅ done · 链·2 · ↗2</div></div>
+      <div class="gnode run" style="left:390px;top:304px"><div class="t">看板组件改造</div><div class="m">🔥 done · 链·2</div></div>
+      <div class="gnode run" style="left:720px;top:96px"><div class="t">导出性能优化</div><div class="m">🔥 拆解中 · 链·3</div></div>
+      <div class="gnode run" style="left:720px;top:384px"><div class="t">集成登录与看板</div><div class="m">🔥 in-progress · ↙2</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ④ done 卡操作 + 接续表单 -->
+<div class="scene" id="s-form">
+  <div class="modal" style="width:640px;height:auto;max-height:calc(100vh - 90px)">
+    <div class="m-head">
+      <div class="m-title">新建任务</div>
+      <div class="tabs"><span class="tab on">从已完成任务接续</span></div>
+    </div>
+    <div class="m-body">
+      <div class="f-row"><label>继承自（可多选 · 仅已完成任务）</label>
+        <div class="ms" id="ms">
+          <div class="ms-box">
+            <span class="tag">导出报表基础版 <i class="x">✕</i></span>
+            <span class="tag">看板组件改造 <i class="x">✕</i></span>
+            <input class="ms-input" placeholder="搜索任务名或 ID…">
+          </div>
+          <div class="ms-menu">
+            <div class="ms-item sel"><span class="cb"></span>导出报表基础版<span class="mid">T-a1b2</span><span class="st done">已完成</span></div>
+            <div class="ms-item sel"><span class="cb"></span>看板组件改造<span class="mid">T-c3d4</span><span class="st done">已完成</span></div>
+            <div class="ms-item"><span class="cb"></span>实现会话持久化<span class="mid">T-e5f6</span><span class="st done">已完成</span></div>
+            <div class="ms-empty">无匹配任务（仅列出已完成 · 支持名称/ID 模糊搜索）</div>
+          </div>
+        </div>
+        <div class="hint">合流 ×2：交接摘要将逐父独立注入，不会混合两份终检结论。</div>
+      </div>
+      <div class="f-row"><label>目标</label>
+        <textarea class="f-area">把登录态接入改造后的看板并整体联调：上一期已完成会话持久化与看板组件改造，本期继续____</textarea></div>
+      <div class="f-row"><label>验收标准（可选）</label>
+        <input class="f-input" placeholder="怎么算做完…"></div>
+      <div class="f-row"><label>工作目录 / 权限</label>
+        <input class="f-input" value="/opt/pro/dsh-taskflow · 完全权限（继承自「导出报表基础版」）" readonly></div>
+      <div class="f-actions"><button class="btn gho">仅存草稿</button><button class="btn pri">创建并立即拆解 →</button></div>
+    </div>
+    <div class="donebar" style="border-top:1px solid var(--borderL1);justify-content:space-between;color:var(--label3);font-size:12px">
+      <span>已选 2 个父任务 · 建链 T1 ↗2 / T2 ↙2 形态</span><span></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// 场景切换
+document.querySelectorAll('.switcher button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.switcher button').forEach(x => x.classList.toggle('on', x === b))
+  document.body.dataset.scene = b.dataset.s
+  if (b.dataset.s === 'board') drawWires()
+})
+window.render = () => { if (document.body.dataset.scene === 'board') drawWires() }
+
+// 看板连线
+function drawWires(){
+  const svg = document.getElementById('wires')
+  const wrap = document.getElementById('columns')
+  svg.setAttribute('width', wrap.scrollWidth); svg.setAttribute('height', wrap.scrollHeight)
+  const wr = wrap.getBoundingClientRect()
+  const pos = id => {
+    const el = document.querySelector(`.card[data-id="${id}"]`).getBoundingClientRect()
+    return { x: el.left - wr.left, y: el.top - wr.top, w: el.width, h: el.height }
+  }
+  const edges = [ ['T1','T2'], ['T1','T3'], ['T2','T4'], ['T3','T4'], ['T2','T5'] ]
+  const colorOf = b => b === 'T5' ? 'var(--warn)' : 'var(--label3)'
+  const mk = c => c === 'warn' ? 'arr-warn' : 'arr-gray'
+  svg.innerHTML = `<defs>
+      <marker id="arr-gray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 L2.5,5 z" fill="var(--label3)"/></marker>
+      <marker id="arr-warn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 L2.5,5 z" fill="var(--warn)"/></marker>
+    </defs>` + edges.map(([a,b]) => {
+    const A = pos(a), B = pos(b)
+    const color = colorOf(b)
+    const sameCol = Math.abs(A.x - B.x) < 8
+    let d
+    if (sameCol) {
+      // 同列（父上子下）：父卡下缘中点 → 子卡上缘上方，箭头朝下顶住子卡
+      const x = A.x + A.w / 2
+      d = `M ${x} ${A.y + A.h} C ${x} ${(A.y + A.h + B.y) / 2}, ${x} ${(A.y + A.h + B.y) / 2}, ${x} ${B.y - 6}`
+    } else {
+      // 跨列（父右子左）：父卡右缘 → 子卡右缘外 6px，箭头朝左顶住子卡
+      const x1 = A.x + A.w, y1 = A.y + A.h / 2, y2 = B.y + B.h / 2, mx = (A.x + A.w + B.x + B.w) / 2
+      d = `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${B.x + B.w + 6} ${y2}`
+    }
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.8" stroke-dasharray="5 4" opacity=".55" marker-end="url(#${mk(color)})"/>`
+  }).join('')
+  // hover 链高亮
+  document.querySelectorAll('.card').forEach(c => {
+    c.onmouseenter = () => {
+      const chains = c.dataset.chain.split(' ')
+      const ids = new Set([c.dataset.id])
+      edges.forEach(([a,b]) => {
+        const ea = document.querySelector(`.card[data-id="${a}"]`), eb = document.querySelector(`.card[data-id="${b}"]`)
+        if (chains.some(ch => ea.dataset.chain.includes(ch) && eb.dataset.chain.includes(ch))) { ids.add(a); ids.add(b) }
+      })
+      document.querySelectorAll('.card').forEach(x => x.classList.toggle('dim', !ids.has(x.dataset.id)))
+      svg.querySelectorAll('path').forEach(p => p.style.opacity = .12)
+      edges.forEach(([a,b]) => { if (ids.has(a) && ids.has(b)) highlightEdge(a,b) })
+    }
+    c.onmouseleave = () => {
+      document.querySelectorAll('.card').forEach(x => x.classList.remove('dim'))
+      svg.querySelectorAll('path').forEach(p => p.style.opacity = '')
+    }
+  })
+  function highlightEdge(a,b){
+    svg.querySelectorAll('path').forEach(p => { /* 简化：整条边重画过，这里按 data-edge 粗略匹配箭头 */
+      if (p.dataset && p.dataset.edge === `${a}-${b}`) p.style.opacity = 1
+    })
+  }
+}
+drawWires()
+addEventListener('resize', drawWires)
+</script>
+</body>
+</html>
