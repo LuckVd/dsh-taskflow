@@ -204,6 +204,10 @@ export const TASKFLOW_CSS = `
 .tf-modal-body-fill { overflow: hidden; }
 .tf-modal-foot { flex: none; border-top: 1px solid ${V.borderL1}; padding: 10px 20px; }
 .tf-modal-foot .tf-actions { padding-top: 0; }
+/* 弹窗底部拖拽手柄：拉高弹窗，多出的高度归 tab 内弹性块（流程 tab = 轨迹面板）。 */
+.tf-modal-resize { flex: none; height: 10px; display: flex; align-items: center; justify-content: center; cursor: ns-resize; touch-action: none; }
+.tf-modal-resize span { width: 64px; height: 4px; border-radius: 999px; background: ${V.borderL1}; transition: background 120ms ease; }
+.tf-modal-resize:hover span, .tf-modal-resize:focus-visible span { background: ${V.borderL3}; }
 .tf-modal .tf-banner { margin: 0; }
 
 /* —— 验收工作台（2026-09-11 语义：任务级判定面优先 + 过程举证折叠附录 + 吸底裁决栏；
@@ -342,6 +346,10 @@ export const TASKFLOW_CSS = `
 /* 状态色语言对齐 StatusDot：执行中琥珀（呼吸）/ 待核验蓝 / 完成绿 / 受阻红 / 等待灰。 */
 .tf-dag-scroll { overflow-x: auto; padding: 2px 0 8px; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
 .tf-dag-svg { display: block; max-width: none; }
+/* 流程 tab 填充式布局下：流程图容器高度固定（不随任务 DAG 大小 / 选中节点变化），
+   小图居中，大图双向滚动看全——弹窗内其余区块的位置因此稳定不跳。 */
+.tf-flow .tf-dag-scroll { flex: none; height: 340px; overflow: auto; display: flex; }
+.tf-flow .tf-dag-svg { margin: auto; }
 .tf-dag-edge { fill: none; stroke: ${V.borderL2}; stroke-width: 1.4; }
 .tf-dag-edge-done { stroke: ${V.inkGreen}; opacity: 0.55; }
 .tf-dag-edge-flow { stroke: ${V.business}; stroke-width: 1.8; stroke-dasharray: 6 5; animation: tf-dag-dash 1.1s linear infinite; }
@@ -382,6 +390,15 @@ export const TASKFLOW_CSS = `
 .tf-dag-panel { border: 1px solid ${V.borderL1}; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; background: ${V.bgBase}; }
 .tf-dag-panel-head { display: flex; align-items: center; gap: 8px; }
 .tf-dag-panel .tf-timeline { max-height: 240px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: ${V.borderL3} transparent; }
+/* 流程 tab 填充式布局（2026-09-22）：流程 tab 与验收台同走 tf-modal-body-fill，
+   图固定高度，轨迹面板弹性占满剩余空间，底部常驻一行节点基本信息栏。 */
+.tf-flow { flex: 1 1 auto; min-height: 0; }
+.tf-flow .tf-dag-panel { flex: 1 1 auto; min-height: 120px; }
+.tf-flow .tf-dag-panel .tf-timeline { flex: 1 1 auto; min-height: 0; max-height: none; }
+.tf-dag-meta { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; padding: 7px 12px; border: 1px solid ${V.borderL1}; border-radius: 10px; background: ${V.bgLayer2}; font-size: 12px; color: ${V.label2}; }
+.tf-dag-meta-item { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
+.tf-dag-meta-label { color: ${V.label3}; flex: none; }
+.tf-dag-meta-value { font-weight: 600; color: ${V.label}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .tf-dag-edge-flow, .tf-dag-node-in-progress > rect, .tf-dag-phase-in-progress > rect { animation: none; }
 }

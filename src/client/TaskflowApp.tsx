@@ -5,6 +5,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { TaskflowTransport } from './api.ts'
 import {
   actorLabel,
@@ -1042,6 +1043,7 @@ function DetailModal({
   const [error, setError] = useState<string | null>(null)
   const dialogRef = useRef<HTMLElement>(null)
   useDialogA11y(dialogRef, onClose)
+  const onResizeStart = useModalResize(dialogRef)
   const approvalPending = (task.approvals ?? []).some(a => a.status === 'pending')
 
   const act = async (action: Record<string, unknown>): Promise<void> => {
@@ -1088,8 +1090,8 @@ function DetailModal({
             </button>
           ))}
         </nav>
-        {/* 验收 tab 是填充式工作台（内部自带滚动与吸底操作），其余 tab 走普通滚动 */}
-        <div className={tab === 'review' ? 'tf-modal-body tf-modal-body-fill' : 'tf-modal-body'}>
+        {/* 验收 tab 与流程 tab 是填充式工作台（内部自带滚动与吸底操作），其余 tab 走普通滚动 */}
+        <div className={tab === 'review' || tab === 'flow' ? 'tf-modal-body tf-modal-body-fill' : 'tf-modal-body'}>
           {error !== null && <div className="tf-banner" role="alert">{error}</div>}
           <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
           {tab === 'contract' && <ContractTab task={task} />}
@@ -1102,9 +1104,47 @@ function DetailModal({
         <footer className="tf-modal-foot">
           <TaskActions task={task} busy={busy} act={act} />
         </footer>
+        {/* 底部拖拽手柄：拉高弹窗，多出的高度全给弹性块（流程 tab = 轨迹面板；验收 tab = 判定面）。 */}
+        <div
+          className="tf-modal-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖拽调整弹窗高度"
+          onPointerDown={onResizeStart}
+        >
+          <span aria-hidden="true" />
+        </div>
       </aside>
     </div>
   )
+}
+
+/** 弹窗高度拖拽（2026-09-22）：按住底部手柄纵向拉伸；clamp 在 480px–视口内。
+ *  只改弹窗高度，不碰布局——多出的空间由 tab 内部的弹性块（flex:1）自然吸收。 */
+function useModalResize(
+  dialogRef: { current: HTMLElement | null },
+): (event: ReactPointerEvent) => void {
+  const stateRef = useRef<{ startY: number; startH: number } | null>(null)
+  return useCallback((event: React.PointerEvent) => {
+    event.preventDefault()
+    const modal = dialogRef.current
+    if (modal === null) return
+    stateRef.current = { startY: event.clientY, startH: modal.offsetHeight }
+    const move = (ev: PointerEvent): void => {
+      const start = stateRef.current
+      if (start === null) return
+      const max = window.innerHeight - 16
+      const next = Math.min(max, Math.max(480, start.startH + (ev.clientY - start.startY)))
+      modal.style.height = `${Math.round(next)}px`
+    }
+    const up = (): void => {
+      stateRef.current = null
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }, [dialogRef])
 }
 
 // —— 权限审批区（§7.1b：两档裁决 = 完全放行 / 拒绝）——
@@ -1295,20 +1335,51 @@ function AcceptanceList({ items, title }: { items: AcceptanceItem[]; title: stri
 // 数据即快照（相位状态 + Subtask.deps/status），SSE change 每推一次整图重渲染，无需后端改动。
 // 管线：AI 拆解（药丸）→ 子任务 DAG（卡片，整体右移一层）→ AI 终检（药丸）→ 人工终批（药丸）。
 
-/** DAG 节点卡与间距（px）：坐标 = 层号/层内序号换算，横向铺开，超宽容器滚动。 */
+/** DAG 节点卡与间距（px）：坐标 = 槽位换算，蛇形折行铺开。 */
 const DAG_NODE_W = 192
 const DAG_NODE_H = 62
 const DAG_GAP_X = 56
 const DAG_GAP_Y = 14
 const DAG_PAD = 14
+/** 每行槽位数：4 槽 ≈ 1000px，弹窗内横向零滚动零缩放（字号不缩水的关键）。 */
+const DAG_SLOTS_PER_BAND = 4
+/** 折行之间的纵向间隔（px）。 */
+const DAG_BAND_GAP_Y = 56
 
-/** 拆解相位占第 0 层：子任务层号 +1；终检/终批在 layerCount+1 / +2。 */
-function dagLayerX(layer: number): number {
-  return DAG_PAD + layer * (DAG_NODE_W + DAG_GAP_X)
+/**
+ * 蛇形布局几何（2026-09-22）：槽位序列从真实数据推导——拆解(0) + 子任务依赖分层
+ * (1..n) + 终检(n+1) + 终批(n+2)，每行 DAG_SLOTS_PER_BAND 槽折行；偶数行左→右、
+ * 奇数行右→左（折返处两行首尾同列相接，连线自然下垂）。与流程具体形态无关：
+ * 无子任务、链式、多层并行都按同一规则折行。
+ */
+function dagGeometry(rows: number, totalLayers: number) {
+  const bandBlock = rows * DAG_NODE_H + Math.max(0, rows - 1) * DAG_GAP_Y
+  const bands = Math.max(1, Math.ceil(totalLayers / DAG_SLOTS_PER_BAND))
+  return {
+    /** 恒定宽度：不随任务大小变化（切换卡片零跳动）。 */
+    width: DAG_PAD * 2 + DAG_SLOTS_PER_BAND * DAG_NODE_W + (DAG_SLOTS_PER_BAND - 1) * DAG_GAP_X,
+    height: DAG_PAD * 2 + bands * bandBlock + (bands - 1) * DAG_BAND_GAP_Y,
+    /** 槽位 → 画布坐标（index = 层内第几个节点）。 */
+    pos: (slot: number, index: number): { x: number; y: number } => {
+      const band = Math.floor(slot / DAG_SLOTS_PER_BAND)
+      const local = slot % DAG_SLOTS_PER_BAND
+      const visual = band % 2 === 0 ? local : DAG_SLOTS_PER_BAND - 1 - local
+      return {
+        x: DAG_PAD + visual * (DAG_NODE_W + DAG_GAP_X),
+        y: DAG_PAD + band * (bandBlock + DAG_BAND_GAP_Y) + index * (DAG_NODE_H + DAG_GAP_Y),
+      }
+    },
+  }
 }
 
-function dagNodePos(node: DagNode): { x: number; y: number } {
-  return { x: dagLayerX(node.layer + 1), y: DAG_PAD + node.index * (DAG_NODE_H + DAG_GAP_Y) }
+/** 边路径：同向（右→左出发）走贝塞尔；折行折返（目标在源左侧同列）走竖直 S 弧。 */
+function dagEdgePath(x1: number, y1: number, x2: number, y2: number): string {
+  if (x2 < x1) {
+    const my = (y1 + y2) / 2
+    return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`
+  }
+  const dx = Math.max(20, (x2 - x1) / 2)
+  return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
 }
 
 /** 流程图节点选中态：点子任务卡或相位药丸 → 下方展开该节点的执行轨迹。 */
@@ -1328,12 +1399,15 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
   const phaseById = new Map(phases.map(p => [p.id, p]))
   const rows = Math.max(1, ...layout.layerSizes)
   const totalLayers = 3 + layout.layerCount // 拆解 + 子任务层 + 终检 + 终批
-  const width = DAG_PAD * 2 + totalLayers * DAG_NODE_W + (totalLayers - 1) * DAG_GAP_X
-  const height = DAG_PAD * 2 + rows * DAG_NODE_H + (rows - 1) * DAG_GAP_Y
+  const geo = dagGeometry(rows, totalLayers)
+  const width = geo.width
+  const height = geo.height
+  // 槽位定位：子任务层号 +1（拆解占第 0 槽）；终检/终批在 layerCount+1 / +2。
+  const dagNodePos = (node: DagNode): { x: number; y: number } => geo.pos(node.layer + 1, node.index)
   const nodeById = new Map(layout.nodes.map(n => [n.sub.id, n]))
   const doneCount = task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length
-  // 相位药丸纵向上放第一行（稳定不跳；与根子任务同行）
-  const phasePos = (layer: number) => ({ x: dagLayerX(layer), y: DAG_PAD })
+  // 相位药丸放所在槽位的第一行（稳定不跳；与该槽子任务同排）
+  const phasePos = (slot: number) => geo.pos(slot, 0)
   const decomposeBox = phasePos(0)
   const finalcheckBox = phasePos(layout.layerCount + 1)
   const acceptBox = phasePos(layout.layerCount + 2)
@@ -1343,12 +1417,12 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
   const leaves = layout.nodes.filter(n => !layout.edges.some(e => e.from === n.sub.id))
   const finalcheckRunning = phaseById.get('finalcheck')?.status === 'in-progress'
   return (
-    <div className="tf-section">
+    <div className="tf-section tf-flow">
       <span className="tf-section-title">
         执行流程（{doneCount}/{task.subtasks.length} 完成{task.subtasks.length === 0 && task.status === 'decomposing' ? ' · 拆解中' : ''} · 实时）
       </span>
       <span className="tf-hint">
-        任务管线从左到右：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。点击节点查看它的执行轨迹。
+        任务管线蛇形排布（左→右，折行右→左）：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。点击节点查看它的执行轨迹。
       </span>
       <div className="tf-dag-scroll">
         <svg
@@ -1362,9 +1436,8 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
           {(() => {
             // —— 相位连线：拆解 → 根（无根时直连终检）；叶子 → 终检 → 终批 ——
             const edgeTo = (x1: number, y1: number, x2: number, y2: number, cls: string, key: string, title: string) => {
-              const dx = Math.max(20, (x2 - x1) / 2)
               return (
-                <path key={key} className={`tf-dag-edge ${cls}`} d={`M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`}>
+                <path key={key} className={`tf-dag-edge ${cls}`} d={dagEdgePath(x1, y1, x2, y2)}>
                   <title>{title}</title>
                 </path>
               )
@@ -1429,7 +1502,6 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
             const y1 = from.y + DAG_NODE_H / 2
             const x2 = to.x
             const y2 = to.y + DAG_NODE_H / 2
-            const dx = Math.max(20, (x2 - x1) / 2)
             const edgeClass =
               source.sub.status === 'done' ? 'tf-dag-edge-done'
               : target.sub.status === 'in-progress' && target.sub.sessionId !== undefined ? 'tf-dag-edge-flow'
@@ -1438,7 +1510,7 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
               <path
                 key={`edge-${i}`}
                 className={`tf-dag-edge ${edgeClass}`}
-                d={`M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`}
+                d={dagEdgePath(x1, y1, x2, y2)}
               >
                 <title>{`${source.sub.title} → ${target.sub.title}`}</title>
               </path>
@@ -1508,8 +1580,92 @@ function FlowTab({ task }: { task: Task }): JSX.Element {
       {selected === null
         ? <span className="tf-hint">点击图中节点（子任务卡 / 阶段药丸）查看它的执行轨迹；执行中的节点会实时滚动更新最新进度。</span>
         : <DagHistoryPanel task={task} selection={selected} />}
+      <DagMetaBar task={task} selection={selected} />
     </div>
   )
+}
+
+/** 时长的人类可读形态（流程图底部信息栏的执行时间用）。 */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分`
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`
+}
+
+/** Token 数的人类可读形态（12.3k / 1.25M；流程图底部信息栏用）。 */
+function formatTokens(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return '—'
+  if (count < 1000) return `${count}`
+  if (count < 1000 * 1000) return `${(count / 1000).toFixed(1)}k`
+  return `${(count / (1000 * 1000)).toFixed(2)}M`
+}
+
+/** 流程图底部信息栏（2026-09-22）：一行展示当前选中节点 / 任务的基本信息。
+ *  未选中节点 = 任务级概况；选中子任务 = 状态/轮次/会话/执行时间/模型/依赖；
+ *  选中相位 = 相位状态与说明。数据全部来自 ledger 快照，纯投影。 */
+function DagMetaBar({ task, selection }: { task: Task; selection: DagSelection | null }): JSX.Element {
+  const items: Array<{ label: string; value: string }> = []
+  if (selection === null) {
+    items.push(
+      { label: '子任务', value: `${task.subtasks.filter(s => s.status === 'done' || s.status === 'review').length}/${task.subtasks.length} 完成` },
+      { label: '迭代', value: `第 ${task.round} 轮` },
+      { label: '创建于', value: relativeTime(task.createdAt) },
+      { label: '更新于', value: relativeTime(task.updatedAt) },
+    )
+  } else if (selection.kind === 'sub') {
+    const sub = task.subtasks.find(s => s.id === selection.id)
+    if (sub !== undefined) {
+      // 执行时间从首次真正开工（第一条 to === 'in-progress' 的流转）算起，
+      // 不含拆解编排期的等待（建卡/依赖排队不算执行）。
+      const times = sub.history.map(event => event.at)
+      const startedAt = sub.history.find(event => event.to === 'in-progress')?.at
+      const running = sub.status === 'in-progress' && sub.sessionId !== undefined
+      const end = running ? Date.now() : times.length > 0 ? Math.max(...times) : undefined
+      const latestSession = sub.sessionId ?? sub.sessionIds[sub.sessionIds.length - 1]
+      const model = latestSession !== undefined ? modelForSession(sub, latestSession) : undefined
+      const usage = sub.tokenUsage
+      items.push(
+        { label: '状态', value: subtaskStatusLabel(sub.status) },
+        { label: '轮次', value: `第 ${sub.round} 轮` },
+        { label: '会话', value: `${sub.attempt} 次` },
+        { label: '执行时间', value: startedAt !== undefined && end !== undefined && end >= startedAt ? `${formatDuration(end - startedAt)}${running ? '（进行中）' : ''}` : '—' },
+        { label: 'Token', value: usage !== undefined ? `入 ${formatTokens(usage.inputTokens)} · 出 ${formatTokens(usage.outputTokens)}${usage.reasoningTokens !== undefined ? ` · 推理 ${formatTokens(usage.reasoningTokens)}` : ''}` : '—' },
+        { label: '模型', value: model ?? '宿主默认' },
+        { label: '依赖', value: sub.deps.length > 0 ? `${sub.deps.length} 项` : '无' },
+      )
+    } else {
+      items.push({ label: '子任务', value: '已不存在' })
+    }
+  } else {
+    const phase = dagPhases(task).find(p => p.id === selection.id)
+    if (phase !== undefined) {
+      items.push(
+        { label: '相位', value: phase.label },
+        { label: '状态', value: subtaskStatusLabelLike(phase.status) },
+        { label: '说明', value: phase.line },
+      )
+    }
+  }
+  return (
+    <div className="tf-dag-meta" role="status" aria-label="节点基本信息">
+      {items.map(item => (
+        <span className="tf-dag-meta-item" key={item.label}>
+          <span className="tf-dag-meta-label">{item.label}</span>
+          <span className="tf-dag-meta-value" title={item.value}>{item.value}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** 相位状态复用子任务状态色语言的展示名（DagPhase.status ∈ pending/in-progress/done/blocked/review）。 */
+function subtaskStatusLabelLike(status: DagPhase['status']): string {
+  return status === 'in-progress' ? '进行中' : status === 'done' ? '完成' : status === 'review' ? '待人' : status === 'blocked' ? '受阻' : '等待'
 }
 
 /** 节点轨迹面板（三期：历史内嵌流程图）：点选节点 → 下方升序时间线；
