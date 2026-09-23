@@ -526,6 +526,25 @@ export const TASKFLOW_CSS = `
 .tf-tl-detail { font-size: 12px; color: ${V.label2}; margin-top: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tf-tl-reject { border-left: 2px solid ${V.errorSecondary}; padding-left: 8px; }
 
+/* —— 拆解记录 tab（2026-09-22 方案A「产出白卡」）：一次拆解 = 一张卡，
+ *    视觉语言对齐总览 tab 白卡（左语义条 + 圆角卡 + 数字统计 chip）；重拆/失败卡左条转琥珀。 —— */
+.tf-dc-card { background: ${V.bgLayer2}; border: 1px solid ${V.borderL1}; border-left: 3px solid ${V.business}; border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
+.tf-dc-card.warn { border-left-color: ${V.warn}; }
+.tf-dc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tf-dc-title { font-weight: 700; font-size: 13px; }
+.tf-dc-time { font-size: 11px; color: ${V.label3}; }
+.tf-dc-copy { margin-left: auto; }
+.tf-dc-stats { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.tf-dc-num { display: inline-flex; align-items: baseline; gap: 3px; font-size: 11px; line-height: 20px; padding: 0 8px; border-radius: 999px; background: ${V.businessTertiary}; color: ${V.business}; font-weight: 600; }
+.tf-dc-num b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.tf-dc-num small { font-size: 10px; font-weight: 400; color: ${V.label2}; }
+.tf-dc-list { margin-top: 10px; padding-top: 10px; border-top: 1px dashed ${V.borderL1}; display: flex; flex-direction: column; gap: 6px; }
+.tf-dc-item { display: flex; gap: 8px; font-size: 12.5px; color: ${V.label}; align-items: baseline; min-width: 0; }
+.tf-dc-item .n { flex: none; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 6px; background: ${V.businessTertiary}; color: ${V.business}; font-size: 11px; font-weight: 600; }
+.tf-dc-item span:last-child { overflow-wrap: anywhere; }
+.tf-dc-retry { margin-top: 10px; padding: 6px 10px; border-radius: 8px; background: ${V.warnTertiary}; color: ${V.warnLabel}; font-size: 12px; }
+.tf-dc-legacy { font-size: 11px; color: ${V.label3}; }
+
 /* —— 状态点（抽屉内 8px 加大版）—— */
 .tf-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .tf-dot-blue { background: ${V.business}; }

@@ -648,6 +648,20 @@ export class TaskflowEngine {
       const task = findTask(ledger, taskId)
       if (task === null || task.status !== 'decomposing') return
 
+      // FR-03 留痕增强：拆解产出记录（拆解记录 tab 展示：模型 / 子任务数 / 标题 / 验收条数）
+      const recordModel = modelLabel(task.model ?? this.globalSettings.decompose)
+      task.decomposeRecords = [
+        ...(task.decomposeRecords ?? []).filter(r => r.sessionId !== sessionId),
+        {
+          sessionId,
+          at: Date.now(),
+          ...(recordModel !== undefined ? { model: recordModel } : {}),
+          subtaskCount: output.subtasks.length,
+          subtaskTitles: output.subtasks.map(item => item.title),
+          acceptanceCount: output.taskAcceptance.length,
+        },
+      ]
+
       // FR-02：验收标准合并
       const existing = task.contract.acceptance
       if (existing.length === 0) {

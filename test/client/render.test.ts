@@ -147,7 +147,7 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     await waitFor(() => doc.querySelector('.tf-modal') !== null)
     expect(doc.querySelector('.tf-modal[aria-modal="true"]')).toBeTruthy()
     const tabs = [...doc.querySelectorAll('.tf-tab')].map(el => el.textContent)
-    expect(tabs.join(',')).toContain('合同')
+    expect(tabs.join(',')).toContain('总览')
     expect(tabs.join(',')).toContain('流程')
     expect(tabs.join(',')).toContain('子任务')
     expect(tabs.join(',')).toContain('验收')
@@ -499,11 +499,13 @@ describe.skipIf(!existsSync(bundlePath))('客户端渲染冒烟（dist 产物 + 
     expect(doneCard).toBeTruthy()
     ;(doneCard as HTMLElement).click()
     await waitFor(() => doc.querySelector('.tf-modal') !== null)
-    // 默认 tab 即「产物」页：验收完成（done）不再进验收页，产物独立成页第一眼可见
+    // 默认 tab 即「总览」（原「产物」页已并入总览）：验收完成（done）第一眼可见产物
     await waitFor(() => doc.querySelector('[data-testid="deliverables"]') !== null)
     const activeTab = [...doc.querySelectorAll('.tf-tab')].find(el => el.getAttribute('aria-selected') === 'true')
-    expect(activeTab?.textContent).toContain('产物')
+    expect(activeTab?.textContent).toContain('总览')
     expect(doc.querySelector('[data-testid="deliverables"]')!.textContent).toContain('交付物（1）')
+    // 产物 tab 已退役
+    expect([...doc.querySelectorAll('.tf-tab')].map(el => el.textContent).join(',')).not.toContain('产物')
     // 验收页未默认打开（验收页专注验收，done 后不再进）
     expect(doc.querySelector('.tf-task-head')).toBeNull()
 

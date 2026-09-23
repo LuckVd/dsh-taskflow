@@ -54,14 +54,13 @@ import type { Artifact, ArtifactPreview, DispatchResult, EngineState, GlobalSett
 import { CAPABILITIES, MAX_LINEAGE_PARENTS } from '../protocol/types.ts'
 import type { AcceptanceItem, Evidence, Subtask, Task } from '../protocol/types.ts'
 
-type TabId = 'contract' | 'flow' | 'subtasks' | 'review' | 'deliverables' | 'decompose'
+type TabId = 'overview' | 'flow' | 'subtasks' | 'review' | 'decompose'
 
 const TABS: ReadonlyArray<{ id: TabId; title: string }> = [
-  { id: 'contract', title: '合同' },
+  { id: 'overview', title: '总览' },
   { id: 'flow', title: '流程' },
   { id: 'subtasks', title: '子任务' },
   { id: 'review', title: '验收' },
-  { id: 'deliverables', title: '产物' },
   { id: 'decompose', title: '拆解记录' },
 ]
 
@@ -1259,14 +1258,13 @@ function DetailModal({
   /** 接续新任务（done 卡底部操作 / 验收台「确认并接续」）。 */
   onFollowUp: (taskId: string) => void
 }): JSX.Element {
-  // 默认落点（2026-09-12 口径 + 2026-09-21 流程图）：review = 等终批，落验收页
-  // （验收页专注验收）；done = 验收完成，落「产物」页；in-progress = 执行中，
-  // 落「流程」页（点开就看正在执行的 DAG）；其余状态从合同看起。
+  // 默认落点：review = 等终批，落验收页（验收页专注验收）；done = 验收完成，
+  // 落「总览」（产物已并入总览，第一眼可见）；in-progress = 执行中，落「流程」
+  // 页（点开就看正在执行的 DAG）；其余状态从总览看起。
   const [tab, setTab] = useState<TabId>(
     task.status === 'review' ? 'review'
-    : task.status === 'done' ? 'deliverables'
     : task.status === 'in-progress' ? 'flow'
-    : 'contract',
+    : 'overview',
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1341,11 +1339,10 @@ function DetailModal({
         <div className={tab === 'review' || tab === 'flow' ? 'tf-modal-body tf-modal-body-fill' : 'tf-modal-body'}>
           {error !== null && <div className="tf-banner" role="alert">{error}</div>}
           <ApprovalSection task={task} busy={busy} act={act} focusApprovalId={focusApprovalId} />
-          {tab === 'contract' && <ContractTab task={task} parents={parentTasks} onOpenTask={onOpenTask} />}
+          {tab === 'overview' && <ContractTab task={task} parents={parentTasks} onOpenTask={onOpenTask} transport={transport} />}
           {tab === 'flow' && <FlowTab task={task} parents={parentTasks} />}
           {tab === 'subtasks' && <SubtasksTab task={task} />}
           {tab === 'review' && <ReviewTab task={task} busy={busy} act={act} transport={transport} onApproveAndContinue={approveAndContinue} />}
-          {tab === 'deliverables' && <DeliverablesTab task={task} transport={transport} />}
           {tab === 'decompose' && <DecomposeTab task={task} />}
         </div>
         <footer className="tf-modal-foot">
@@ -1541,12 +1538,13 @@ function TaskActions({
 
 // —— 各标签页 ——
 
-// 合同 tab（2026-09-22 改版：白卡三段 = 目标 / 验收标准 / 条款，视觉语言对齐
-// 验收台判定面与创建弹窗 Bento；原「键值表 + 平铺列表」退役）。
-/** 合同 tab「接续自」行数据：父任务解析结果（null = 父已删除，灰显）。 */
+// 总览 tab（2026-09-22 改版：白卡三段 = 目标 / 验收标准 / 条款，视觉语言对齐
+// 验收台判定面与创建弹窗 Bento；原「键值表 + 平铺列表」退役。同日再改：原「合同」
+// 更名「总览」，产物（任务级交付物）并入本页，独立产物 tab 退役）。
+/** 总览 tab「接续自」行数据：父任务解析结果（null = 父已删除，灰显）。 */
 type ParentRef = { id: string; task: Task | null }
 
-function ContractTab({ task, parents, onOpenTask }: { task: Task; parents: ParentRef[]; onOpenTask: (taskId: string) => void }): JSX.Element {
+function ContractTab({ task, parents, onOpenTask, transport }: { task: Task; parents: ParentRef[]; onOpenTask: (taskId: string) => void; transport: TaskflowTransport }): JSX.Element {
   const refined = task.contract.sourceOfAcceptance === 'ai-refined' && task.contract.originalHumanAcceptance !== undefined
   const sourceLabel = task.contract.sourceOfAcceptance === 'human' ? '用户手写' : task.contract.sourceOfAcceptance === 'ai-drafted' ? 'AI 建议稿' : 'AI 细化'
   return (
@@ -1607,6 +1605,8 @@ function ContractTab({ task, parents, onOpenTask }: { task: Task; parents: Paren
           )}
         </div>
       </div>
+      {/* 产物区（2026-09-22：原「产物」tab 并入总览）——任务级交付物 + 只读预览 */}
+      <DeliverablesSection task={task} transport={transport} />
     </>
   )
 }
@@ -2580,19 +2580,96 @@ function TimelineRow({ entry }: { entry: TimelineEntry }): JSX.Element {
   )
 }
 
-// —— 拆解记录（FR-03 留痕）——
+// —— 拆解记录（FR-03 留痕增强）：逐会话展示拆解产出 + 一键复制会话 id 回放 ——
 
 function DecomposeTab({ task }: { task: Task }): JSX.Element {
+  const [copied, setCopied] = useState<string | null>(null)
+  if (task.decomposeSessionIds.length === 0) {
+    return (
+      <div className="tf-section">
+        <span className="tf-section-title">拆解记录</span>
+        <span className="tf-hint">尚未拆解。</span>
+      </div>
+    )
+  }
+  const records = task.decomposeRecords ?? []
+  // 重拆 / 失败留痕：按 refs.sessionId 归到对应会话行下
+  const retryReasons = new Map<string, string[]>()
+  for (const event of task.events) {
+    if (event.kind !== 'decompose-retry' || event.refs?.sessionId === undefined) continue
+    const list = retryReasons.get(event.refs.sessionId) ?? []
+    list.push(event.reason ?? '拆解重试')
+    retryReasons.set(event.refs.sessionId, list)
+  }
+  const copyId = (sessionId: string): void => {
+    void navigator.clipboard?.writeText(sessionId)
+    setCopied(sessionId)
+    setTimeout(() => setCopied(null), 1500)
+  }
   return (
     <div className="tf-section">
       <span className="tf-section-title">拆解记录</span>
-      {task.decomposeSessionIds.length === 0 ? (
-        <span className="tf-hint">尚未拆解。</span>
-      ) : task.decomposeSessionIds.length === 1 ? (
-        <span className="tf-hint">AI 拆解 1 次；完整对话可在宿主会话列表中回放。</span>
-      ) : (
-        <span className="tf-hint">AI 拆解 {task.decomposeSessionIds.length} 次（含重拆）；完整对话可在宿主会话列表中回放。</span>
-      )}
+      <span className="tf-hint">共 {task.decomposeSessionIds.length} 次拆解会话 · 复制会话 id 可在宿主会话列表回放完整对话</span>
+      {task.decomposeSessionIds.map((sessionId, index) => {
+        const record = records.find(r => r.sessionId === sessionId)
+        const retries = retryReasons.get(sessionId) ?? []
+        const date = record !== undefined ? new Date(record.at) : null
+        const time = date !== null
+          ? `${date.toLocaleDateString([], { month: '2-digit', day: '2-digit' })} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          : null
+        // 存量会话降级：按任务当前数据回显（仅单次拆解时信息准确；多次拆解只标会话本身）
+        const legacy = record === undefined && task.decomposeSessionIds.length === 1 && index === 0
+          ? { count: task.subtasks.length, titles: task.subtasks.map(s => s.title), ac: task.contract.acceptance.length }
+          : null
+        const titles = record !== undefined ? record.subtaskTitles : legacy?.titles ?? []
+        const stats = record !== undefined
+          ? [{ n: record.subtaskCount, label: '子任务' }, { n: record.acceptanceCount, label: '验收标准' }]
+          : legacy !== null
+            ? [{ n: legacy.count, label: '子任务' }, { n: legacy.ac, label: '验收标准' }]
+            : null
+        const model = record?.model
+        return (
+          <div className={`tf-dc-card${retries.length > 0 ? ' warn' : ''}`} key={sessionId} data-testid="decompose-record">
+            <div className="tf-dc-head">
+              <span className="tf-dc-title">第 {index + 1} 次拆解</span>
+              {time !== null && <span className="tf-dc-time">{time}</span>}
+              {model !== undefined && <span className="tf-chip tf-chip-mono" title="拆解会话模型">{model}</span>}
+              {legacy !== null && <span className="tf-dc-legacy">存量会话 · 按当前任务数据回显</span>}
+              {record === undefined && legacy === null && <span className="tf-dc-legacy">存量会话（无产出记录）</span>}
+              <button
+                type="button"
+                className="tf-link-btn tf-dc-copy"
+                onClick={() => copyId(sessionId)}
+                title={`会话 id：${sessionId}`}
+              >
+                {copied === sessionId ? '已复制 ✓' : '复制会话 id'}
+              </button>
+            </div>
+            {stats !== null && (
+              <div className="tf-dc-stats">
+                {stats.map(s => (
+                  <span className="tf-dc-num" key={s.label}><b>{s.n}</b><small>{s.label}</small></span>
+                ))}
+              </div>
+            )}
+            {titles.length > 0 && (
+              <div className="tf-dc-list">
+                {titles.map((title, i) => (
+                  <div className="tf-dc-item" key={i}>
+                    <span className="n">{i + 1}</span>
+                    <span>{title}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {retries.length > 0 && (
+              <div className="tf-dc-retry">
+                {retries.map((reason, i) => <div key={i}>↻ {reason}</div>)}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -2645,9 +2722,9 @@ function ArtifactsBlock({
   )
 }
 
-/** 产物页（2026-09-12）：任务级交付物独立成页——验收完成（done）后默认落点。
- *  验收页专注验收；产物不在验收里翻。口径同 §4.5b：只收录验收人终审要看的最终产物。 */
-function DeliverablesTab({ task, transport }: { task: Task; transport: TaskflowTransport }): JSX.Element {
+/** 产物区（2026-09-22）：任务级交付物——原独立「产物」tab 并入总览页底部。
+ *  口径同 §4.5b：只收录验收人终审要看的最终产物。 */
+function DeliverablesSection({ task, transport }: { task: Task; transport: TaskflowTransport }): JSX.Element {
   const previewArtifact = useCallback(
     (path: string) => transport.getArtifactPreview(task.id, path),
     [transport, task.id],

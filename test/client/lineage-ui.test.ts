@@ -96,12 +96,12 @@ describe.skipIf(!existsSync(bundlePath))('血缘 UI（dist 产物 + 真实引擎
     expect(wires!.querySelectorAll('path').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('详情弹窗（子任务）：合同 tab 接续横幅逐父一行；流程 tab 上一棒节点', async () => {
+  it('详情弹窗（子任务）：总览 tab 接续横幅逐父一行；流程 tab 上一棒节点', async () => {
     const doc = dom.window.document
     const childCard = doc.querySelector(`.tf-card[data-task-id="${childId}"]`) as HTMLElement
     childCard.click()
     await waitFor(() => doc.querySelector('.tf-modal') !== null)
-    // in-progress 子任务默认落流程 tab；若还在 decomposing/ready 落合同——两种都断言
+    // in-progress 子任务默认落流程 tab；若还在 decomposing/ready 落总览——两种都断言
     const modal = doc.querySelector('.tf-modal')!
     // 流程 tab 上一棒节点（只读引用）
     const parentTitle = '实现会话持久化'
@@ -109,8 +109,8 @@ describe.skipIf(!existsSync(bundlePath))('血缘 UI（dist 产物 + 真实引擎
     if (flowHasParent) {
       expect(modal.querySelector('.tf-dag-parent')!.textContent).toContain(parentTitle)
     }
-    // 切到合同 tab：接续自横幅
-    const contractTab = [...modal.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('合同')) as HTMLElement
+    // 切到总览 tab（原「合同」）：接续自横幅
+    const contractTab = [...modal.querySelectorAll('.tf-tab')].find(el => el.textContent?.includes('总览')) as HTMLElement
     contractTab.click()
     await waitFor(() => modal.querySelector('.tf-ct-lineage') !== null)
     expect(modal.querySelector('.tf-ct-lineage')!.textContent).toContain('接续自')

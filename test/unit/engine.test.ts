@@ -127,6 +127,45 @@ describe('引擎：创建 → 拆解 → 执行 → 证据 → 验收', () => {
     }
   })
 
+  it('拆解留痕增强：成功拆解落 decomposeRecords（会话/子任务数/标题/验收条数）', async () => {
+    const dir = await tempDir()
+    try {
+      const { engine, adapter } = createEngine(path.join(dir, 'ledger.json'))
+      await engine.boot()
+      adapter.decomposeBehavior = () => ({
+        kind: 'ok',
+        output: {
+          taskAcceptance: [{ text: 'AC 细化' }],
+          subtasks: [
+            { title: '子一', detail: '', acceptance: [{ text: 'a' }], deps: [] },
+            { title: '子二', detail: '', acceptance: [{ text: 'b' }], deps: ['s1'] },
+          ],
+        },
+      })
+      const result = await engine.dispatch({
+        type: 'createTask',
+        requestId: 'req-record',
+        title: '拆解留痕',
+        description: '描述',
+        autoStart: false,
+      })
+      const taskId = result.taskId!
+      await waitFor(() => statusOf(engine, taskId)() === 'ready')
+      const task = taskOf(engine, taskId)
+      expect(task.decomposeRecords).toHaveLength(1)
+      const record = task.decomposeRecords![0]!
+      expect(record.sessionId).toBe(task.decomposeSessionIds[0])
+      expect(record.subtaskCount).toBe(2)
+      expect(record.subtaskTitles).toEqual(['子一', '子二'])
+      expect(record.acceptanceCount).toBe(1)
+      expect(record.at).toBeGreaterThan(0)
+      // 未配置模型 → 无 model 字段（降级显示宿主默认）
+      expect(record.model).toBeUndefined()
+    } finally {
+      await cleanup(dir)
+    }
+  })
+
   it('细化不等长 → 拆解失败重试 1 次 → 仍失败 blocked（T3′）', async () => {
     const dir = await tempDir()
     try {

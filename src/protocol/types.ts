@@ -52,6 +52,12 @@ export interface Task {
   permissionConfirmed: boolean
   /** 拆解会话 transcript 引用（复盘用）。 */
   decomposeSessionIds: string[]
+  /**
+   * 拆解会话产出记录（与 decomposeSessionIds 按 sessionId 对齐；仅成功的会话有）：
+   * 记录所用模型、产出的子任务数与标题、验收标准条数——拆解记录 tab 展示用。
+   * undefined / 缺项 = 存量任务（该会话早于此字段），客户端降级只显示会话本身。
+   */
+  decomposeRecords?: DecomposeRecord[]
   /** 工具提权审批记录（按任务截断保留最近 50 条，NFR-05 风格）。 */
   approvals?: ApprovalRecord[]
   /**
@@ -248,6 +254,21 @@ export interface EvidenceSummary {
 }
 
 // —— 事件（任务级与子任务级同构）——
+
+/** 拆解会话产出记录（FR-03 留痕增强）：一次成功拆解的产出摘要。 */
+export interface DecomposeRecord {
+  sessionId: string
+  /** 记录时间（拆解成功落库时刻，毫秒 epoch）。 */
+  at: number
+  /** 会话模型标签（modelLabel 输出；任务级覆盖 / 全局拆解槽；未配置 = 宿主默认 → undefined）。 */
+  model?: string
+  /** 本轮拆解产出的子任务数。 */
+  subtaskCount: number
+  /** 子任务标题列表（拆解输出顺序）。 */
+  subtaskTitles: string[]
+  /** 细化后的任务级验收标准条数。 */
+  acceptanceCount: number
+}
 
 export interface TaskEvent {
   id: string
