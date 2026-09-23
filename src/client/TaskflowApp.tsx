@@ -204,10 +204,14 @@ export function TaskflowApp({ transport, onClose }: { transport: TaskflowTranspo
   const lineageTaskCount = tasks.filter(t =>
     (t.parentIds?.length ?? 0) > 0 || (lineageNeighbors.get(t.id)?.children.length ?? 0) > 0,
   ).length
-  /** 打开创建表单并按「接续新任务」预填（done 卡 / 详情 / 验收台共用入口）。 */
+  /** 打开创建表单并按「接续新任务」预填（done 卡 / 详情 / 验收台共用入口）。
+   *  从详情/验收台进入时先关掉详情弹窗：CreateModal 渲染在 DetailModal 之前，
+   *  不关的话详情会盖在接续表单上面，出现「先看到完成弹窗、关掉才是接续」的层序问题。 */
   const openFollowUp = useCallback((taskId: string) => {
     const source = taskById.get(taskId)
     if (source === undefined) return
+    setSelectedId(null)
+    setFocusApprovalId(null)
     setCreatePrefill({ basedOn: [taskId], description: handoffPrefill(source) })
     setCreateOpen(true)
   }, [taskById])
@@ -577,7 +581,7 @@ function TaskCard({
             <button
               type="button"
               className="tf-card-mini primary"
-              title="接续新任务：以本任务为父（basedOn）创建，并预填交接摘要描述模板"
+              title="接续新任务：以本任务为基础创建后续任务，并预填交接摘要"
               onClick={event => { event.stopPropagation(); onFollowUp(task.id) }}
             >
               接续
@@ -606,7 +610,7 @@ function TaskCard({
             <button
               type="button"
               className="tf-card-mini"
-              title="归档任务（需确认；归档后在看板隐藏，可在时间线/详情留痕）"
+              title="归档任务（需确认；归档后看板不再显示，时间线/详情保留记录）"
               onClick={event => { event.stopPropagation(); setConfirmArchive(true) }}
             >
               归档
@@ -1516,7 +1520,7 @@ function TaskActions({
           type="button"
           className="tf-btn"
           disabled={busy}
-          title="接续新任务：以本任务为父（basedOn）创建，并预填「接续「标题」（目标…；终检结论…）」描述模板"
+          title="接续新任务：以本任务为基础创建后续任务，并预填交接摘要"
           onClick={() => onFollowUp(task.id)}
         >
           接续新任务
@@ -1769,9 +1773,6 @@ function FlowTab({ task, parents }: { task: Task; parents: ParentRef[] }): JSX.E
       <span className="tf-section-title">
         执行流程（{doneCount}/{task.subtasks.length} 完成{task.subtasks.length === 0 && task.status === 'decomposing' ? ' · 拆解中' : ''} · 实时）
       </span>
-      <span className="tf-hint">
-        任务管线蛇形排布（左→右，折行右→左）：药丸 = 阶段（拆解 → 子任务 → 终检 → 终批），卡片 = 子任务。琥珀 = 运行中（呼吸），蓝 = 待核验/待人，绿 = 完成，红 = 受阻，灰 = 等待。点击节点查看它的执行轨迹。
-      </span>
       <div className="tf-dag-scroll">
         <svg
           className="tf-dag-svg"
@@ -1965,7 +1966,7 @@ function FlowTab({ task, parents }: { task: Task; parents: ParentRef[] }): JSX.E
         </svg>
       </div>
       {selected === null
-        ? <span className="tf-hint">点击图中节点（子任务卡 / 阶段药丸）查看它的执行轨迹；执行中的节点会实时滚动更新最新进度。</span>
+        ? <span className="tf-hint">点击图中节点查看它的执行轨迹；执行中的节点会实时更新最新进度。</span>
         : <DagHistoryPanel task={task} selection={selected} />}
       <DagMetaBar task={task} selection={selected} />
     </div>
@@ -2347,7 +2348,7 @@ function ReviewTab({
               type="button"
               className="tf-btn"
               disabled={busy}
-              title="终批通过后立即签下一份合同：以本任务为父（basedOn）创建接续任务并预填交接摘要"
+              title="终批通过后立即创建接续任务，并预填交接摘要"
               onClick={() => void onApproveAndContinue()}
             >
               确认并接续 →
@@ -2416,7 +2417,7 @@ function NoEvidencePanel({ sub, no }: { sub: Subtask; no?: number }): JSX.Elemen
           </div>
         ))}
       </div>
-      <span className="tf-hint">该子任务尚未提交证据；执行会话完成时提交，通过三要素校验后出现在这里。</span>
+      <span className="tf-hint">该子任务尚未提交证据；执行完成后会出现在这里。</span>
     </div>
   )
 }
@@ -2609,7 +2610,7 @@ function DecomposeTab({ task }: { task: Task }): JSX.Element {
   return (
     <div className="tf-section">
       <span className="tf-section-title">拆解记录</span>
-      <span className="tf-hint">共 {task.decomposeSessionIds.length} 次拆解会话 · 复制会话 id 可在宿主会话列表回放完整对话</span>
+      <span className="tf-hint">共 {task.decomposeSessionIds.length} 次拆解会话 · 复制会话 id 可回放完整对话</span>
       {task.decomposeSessionIds.map((sessionId, index) => {
         const record = records.find(r => r.sessionId === sessionId)
         const retries = retryReasons.get(sessionId) ?? []
@@ -2707,7 +2708,7 @@ function ArtifactsBlock({
     <div className="tf-ev-section tf-artifacts" data-testid="deliverables">
       <div className="tf-ev-sechead">
         <span className="tf-section-title">交付物（{artifacts.length}）</span>
-        <span className="tf-hint" style={{ marginLeft: 'auto' }}>产物本体——最需要看的东西，点「预览」直接查看</span>
+        <span className="tf-hint" style={{ marginLeft: 'auto' }}>点「预览」直接查看产物内容</span>
       </div>
       {artifacts.map((artifact, index) => (
         <ArtifactRow
@@ -2736,13 +2737,13 @@ function DeliverablesSection({ task, transport }: { task: Task; transport: Taskf
       {artifacts.length === 0 ? (
         <span className="tf-hint">
           {task.evidence === undefined
-            ? '尚无任务级终检产物。（存量任务未跑终检，可到验收页「补跑 AI 终检」后回来看。）'
+            ? '尚无任务级终检产物；可在验收页「补跑 AI 终检」。'
             : '终检未声明文件交付物。'}
         </span>
       ) : (
         <>
           <ArtifactsBlock artifacts={artifacts} previewArtifact={previewArtifact} />
-          <span className="tf-hint">产物由任务级终检声明（§4.5b 口径：只收录验收人终审要看的最终产物）；预览只读，≤256KiB 截断。</span>
+          <span className="tf-hint">产物由任务级终检声明；预览只读，超过 256KiB 截断。</span>
         </>
       )}
     </div>
