@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>拆解记录 tab 改版预览</title>
+<style>
+:root {
+  --bg-base: #1c2128; --bg-layer-2: #262c36; --bg-hover: rgba(128,128,128,0.12);
+  --border-l1: #2f3742; --border-l2: #3a424e;
+  --label: #e6edf3; --label2: #9198a1; --label3: #6e7681;
+  --business: #4493f8; --business-ter: rgba(68,147,248,0.12);
+  --success: #3fb950; --success-ter: rgba(63,185,80,0.12);
+  --warn: #d29922; --warn-ter: rgba(210,153,34,0.12);
+  --error: #f85149;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg-base); color: var(--label); font: 14px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; padding: 28px; }
+h1 { font-size: 16px; margin-bottom: 4px; }
+.sub { font-size: 12px; color: var(--label3); margin-bottom: 20px; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+.panel { background: var(--bg-base); border: 1px solid var(--border-l1); border-radius: 12px; padding: 18px; }
+.panel h2 { font-size: 13px; color: var(--business); margin-bottom: 12px; }
+.tag { font-size: 11px; color: var(--label3); font-weight: 400; margin-left: 6px; }
+.tf-section-title { font-size: 14px; font-weight: 700; }
+.tf-hint { font-size: 12px; color: var(--label3); }
+.chip { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 999px; font-family: ui-monospace, monospace; }
+.chip.model { background: var(--bg-layer-2); color: var(--label2); }
+.chip.num { background: var(--business-ter); color: var(--business); font-weight: 600; }
+.chip.num b { font-size: 13px; }
+.chip.num small { font-size: 10px; color: var(--label3); font-weight: 400; }
+.link { font-size: 12px; color: var(--business); background: none; border: none; cursor: pointer; padding: 0; }
+.link:hover { text-decoration: underline; }
+
+/* ===== 现状 ===== */
+.cur .tf-tl-entry { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border-l1); font-size: 13px; }
+.cur .tf-tl-time { font-size: 11px; color: var(--label3); padding-top: 2px; }
+.cur .tf-tl-label { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.cur .tf-tl-actor { font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 999px; background: var(--bg-layer-2); color: var(--label2); }
+.cur .tf-tl-detail { font-size: 12px; color: var(--label2); margin-top: 2px; white-space: pre-wrap; }
+
+/* ===== 方案 A：产出白卡 ===== */
+.a-card { background: var(--bg-layer-2); border: 1px solid var(--border-l1); border-left: 3px solid var(--business); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
+.a-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.a-title { font-weight: 700; font-size: 13px; }
+.a-time { font-size: 11px; color: var(--label3); }
+.a-copy { margin-left: auto; }
+.a-stats { display: flex; gap: 8px; margin-top: 10px; }
+.a-list { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-l1); display: flex; flex-direction: column; gap: 6px; }
+.a-item { display: flex; gap: 8px; font-size: 12.5px; color: var(--label); align-items: baseline; }
+.a-item .n { flex: none; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 6px; background: var(--business-ter); color: var(--business); font-size: 11px; font-weight: 600; }
+.a-retry { margin-top: 10px; padding: 6px 10px; border-radius: 8px; background: var(--warn-ter); color: var(--warn); font-size: 12px; }
+
+/* ===== 方案 B：会话时间线 ===== */
+.b-rail { position: relative; margin-top: 14px; padding-left: 22px; }
+.b-rail::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--border-l1); border-radius: 2px; }
+.b-node { position: relative; padding: 0 0 18px; }
+.b-node:last-child { padding-bottom: 0; }
+.b-dot { position: absolute; left: -22px; top: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--business); border: 2px solid var(--bg-base); box-shadow: 0 0 0 2px var(--business-ter); }
+.b-dot.ok { background: var(--success); box-shadow: 0 0 0 2px var(--success-ter); }
+.b-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.b-name { font-weight: 700; font-size: 13px; }
+.b-meta { font-size: 12px; color: var(--label2); }
+.b-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--bg-layer-2); border: 1px solid var(--border-l1); color: var(--label); }
+.pill.done { border-color: transparent; background: var(--success-ter); color: var(--success); }
+
+/* ===== 方案 C：统计带 + 折叠行 ===== */
+.c-band { display: flex; gap: 0; background: var(--bg-layer-2); border: 1px solid var(--border-l1); border-radius: 10px; margin-top: 12px; overflow: hidden; }
+.c-cell { flex: 1; padding: 10px 14px; text-align: center; }
+.c-cell + .c-cell { border-left: 1px solid var(--border-l1); }
+.c-num { font-size: 20px; font-weight: 700; color: var(--business); font-variant-numeric: tabular-nums; }
+.c-cell:nth-child(2) .c-num { color: var(--success); }
+.c-label { font-size: 11px; color: var(--label3); margin-top: 1px; }
+.c-row { display: flex; align-items: center; gap: 10px; padding: 11px 12px; margin-top: 8px; background: var(--bg-layer-2); border-radius: 10px; cursor: pointer; }
+.c-row:hover { background: var(--bg-hover); }
+.c-idx { flex: none; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; background: var(--business-ter); color: var(--business); font-size: 12px; font-weight: 700; }
+.c-main { flex: 1; min-width: 0; }
+.c-name { font-size: 13px; font-weight: 600; }
+.c-sub { font-size: 11.5px; color: var(--label3); }
+.c-arrow { color: var(--label3); font-size: 12px; }
+.c-expand { margin: 6px 12px 0; padding: 10px 14px; background: var(--bg-layer-2); border-radius: 0 0 10px 10px; }
+</style>
+</head>
+<body>
+<h1>拆解记录 tab · 现状 vs 三个改版方案</h1>
+<div class="sub">同一份 mock 数据：1 次拆解、3 个子任务、验收标准 4 条、模型 deepseek/deepseek-reasoner·high</div>
+<div class="grid">
+
+  <div class="panel cur">
+    <h2>现状<span class="tag">时间线行，信息平铺、无层次</span></h2>
+    <span class="tf-section-title">拆解记录</span>
+    <div class="tf-hint">共 1 次拆解会话；复制会话 id 到宿主会话列表即可回放完整对话。</div>
+    <div class="tf-tl-entry" style="border-top:none">
+      <span class="tf-tl-time">9/22 14:31</span>
+      <div>
+        <div class="tf-tl-label">
+          <span class="tf-tl-actor">第 1 次</span>
+          <span>产出 3 个子任务 · 验收标准 4 条</span>
+          <span class="chip model">deepseek/deepseek-reasoner·high</span>
+          <button class="link">复制会话 id</button>
+        </div>
+        <div class="tf-tl-detail">1. 登录态迁移到新分片&#10;2. 历史数据双写与校验&#10;3. 回滚开关与预案</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>方案 A · 产出白卡<span class="tag">对齐总览 tab 的白卡语言，卡片即一份拆解产物</span></h2>
+    <span class="tf-section-title">拆解记录</span>
+    <div class="tf-hint" style="margin-top:2px">共 1 次拆解会话 · 复制会话 id 可在宿主回放完整对话</div>
+    <div class="a-card">
+      <div class="a-head">
+        <span class="a-title">第 1 次拆解</span>
+        <span class="a-time">09-22 14:31</span>
+        <span class="chip model">deepseek-reasoner·high</span>
+        <button class="link a-copy">复制会话 id</button>
+      </div>
+      <div class="a-stats">
+        <span class="chip num"><b>3</b> <small>子任务</small></span>
+        <span class="chip num"><b>4</b> <small>验收标准</small></span>
+        <span class="chip num"><b>1</b> <small>轮</small></span>
+      </div>
+      <div class="a-list">
+        <div class="a-item"><span class="n">1</span>登录态迁移到新分片</div>
+        <div class="a-item"><span class="n">2</span>历史数据双写与校验</div>
+        <div class="a-item"><span class="n">3</span>回滚开关与预案</div>
+      </div>
+    </div>
+    <div class="a-card" style="border-left-color: var(--warn)">
+      <div class="a-head">
+        <span class="a-title">第 2 次拆解</span>
+        <span class="a-time">09-22 14:35</span>
+        <button class="link a-copy">复制会话 id</button>
+      </div>
+      <div class="a-retry">↻ 第 1 次拆解失败（验收标准细化不等长），自动重试</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>方案 B · 会话时间线<span class="tag">纵向轨道 + 子任务 pill 标签，最紧凑</span></h2>
+    <span class="tf-section-title">拆解记录</span>
+    <div class="b-rail">
+      <div class="b-node">
+        <span class="b-dot ok"></span>
+        <div class="b-head">
+          <span class="b-name">拆解成功</span>
+          <span class="b-meta">09-22 14:31 · 模型 deepseek-reasoner·high</span>
+          <button class="link" style="margin-left:auto">复制 id</button>
+        </div>
+        <div class="b-pills">
+          <span class="pill done">✓ 登录态迁移到新分片</span>
+          <span class="pill done">✓ 历史数据双写与校验</span>
+          <span class="pill done">✓ 回滚开关与预案</span>
+          <span class="pill">4 条验收标准</span>
+        </div>
+      </div>
+      <div class="b-node">
+        <span class="b-dot"></span>
+        <div class="b-head">
+          <span class="b-name">拆解中</span>
+          <span class="b-meta">09-22 14:40 · 进行中</span>
+        </div>
+        <div class="tf-hint">正在对照任务合同拆解…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>方案 C · 统计带 + 折叠行<span class="tag">顶部数字带给全局感，行可展开，多次拆解最耐放</span></h2>
+    <span class="tf-section-title">拆解记录</span>
+    <div class="c-band">
+      <div class="c-cell"><div class="c-num">1</div><div class="c-label">拆解次数</div></div>
+      <div class="c-cell"><div class="c-num">3</div><div class="c-label">子任务</div></div>
+      <div class="c-cell"><div class="c-num">4</div><div class="c-label">验收标准</div></div>
+    </div>
+    <div class="c-row">
+      <span class="c-idx">1</span>
+      <div class="c-main">
+        <div class="c-name">09-22 14:31 · 3 个子任务</div>
+        <div class="c-sub">deepseek-reasoner·high · tfs_x2f…d1_9k2</div>
+      </div>
+      <button class="link">复制 id</button>
+      <span class="c-arrow">▾</span>
+    </div>
+    <div class="c-expand">
+      <div class="a-item"><span class="n">1</span>登录态迁移到新分片</div>
+      <div class="a-item"><span class="n">2</span>历史数据双写与校验</div>
+      <div class="a-item"><span class="n">3</span>回滚开关与预案</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

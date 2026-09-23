@@ -11,6 +11,22 @@
     --ok:#4caf7d; --warn:#d9a03f; --accent:#5b9dd9; --danger:#d96b6b;
     --accentOk:#3f5a4c; --accentWarn:#5a4b33; --accentInfo:#3a4c5e;
   }
+  /* 浅色主题（README 配图 / 宿主默认浅色对齐）：body.light 时整体覆盖 */
+  body.light{
+    --bgBase:#f6f8fa; --bgLayer2:#eff2f5; --bgLayer3:#e7ebef; --bgHover:#e2e7ec;
+    --borderL1:#d8dee4; --borderL2:#c7ced6; --borderL3:#afb8c1;
+    --label:#1f2328; --label2:#59636e; --label3:#8c959f; --caption:#8c959f;
+    --ok:#1a7f37; --warn:#9a6700; --accent:#1f6feb; --danger:#cf222e;
+    --accentOk:#d3f0dd; --accentWarn:#f5e3bc; --accentInfo:#dbe9fb;
+  }
+  body.light .card{box-shadow:0 1px 3px rgba(31,35,40,.12)}
+  body.light .modal{box-shadow:0 12px 48px rgba(31,35,40,.18)}
+  body.light .st.done{color:#116329}
+  body.light .st.in-progress{color:#7a5200}
+  body.light .ph.done .ph-t{color:#116329}
+  body.light .ph.running .ph-t{color:#7a5200}
+  body.light .gnode.done .t{color:#116329}
+  body.light .switcher button.on{color:#fff}
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bgBase);color:var(--label);font:14px/1.5 -apple-system,"PingFang SC","Segoe UI",sans-serif;height:100vh;overflow:hidden}
   .switcher{position:fixed;top:10px;right:14px;z-index:99;display:flex;gap:8px}
